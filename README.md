@@ -21,7 +21,24 @@ Module: `github.com/easydev-org/easybus-sdk`
 | `identity` | Opt-in HMAC message authentication |
 | `natsrun` | Launch a local `nats-server` for embedded/tests |
 | `conformance` | Transport-agnostic protocol test suite |
-| `types.gen.go` | Generated wire types (from the OpenAPI schema) |
+| `gen/easybus/v1` | Generated wire types (from `proto/easybus/v1`) |
+
+## The wire contract is protobuf
+
+`proto/easybus/v1/protocol.proto` is the **single source of truth** for every
+message that rides the bus. It is language-neutral: `buf generate` emits Go
+today (`gen/easybus/v1`), and TypeScript / Python / Rust bindings later, from
+the same file — no per-language schema to keep in sync. (The old
+abc-protocol defined the contract in TypeScript zod and code-generated Go via
+OpenAPI; this is a semantic rewrite, and wire compatibility with abc-protocol
+is not required.)
+
+Subject conventions (`easybus.<tenant>.<...>`) and tenant rules are runtime
+logic, not schema, and stay in `protocol/protocol.go`.
+
+```sh
+./generate.sh    # buf lint + buf generate + gofmt
+```
 
 ## Install
 

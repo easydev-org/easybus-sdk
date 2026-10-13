@@ -1,0 +1,259 @@
+syntax = "proto3";
+
+// EasyBus wire protocol — the SINGLE SOURCE OF TRUTH for the message shapes
+// that ride the NATS transport between an agent and its extensions.
+//
+// Language-neutral by design: `buf generate` produces Go today, and
+// TypeScript / Python / Rust tomorrow, from this one file. The subject
+// conventions (`easybus.<tenant>.<...>`) and tenant rules are runtime logic
+// and live in protocol/protocol.go, not here.
+//
+// NOTE: this is a semantic rewrite of the old abc-protocol (which was defined
+// in TypeScript zod and code-generated to Go via OpenAPI). We keep the field
+// NAMES and MEANINGS, but wire compatibility with abc-protocol is NOT required
+// — only the semantics must match.
+package easybus.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/easydev-org/easybus-sdk/gen/easybus/v1;easybusv1";
+
+// ── envelope ────────────────────────────────────────────────────────────────
+
+// Envelope is the generic bus envelope; `payload` carries the business body.
+message Envelope {
+  // Kind is the transport primitive a message uses.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_REQ = 1;   // ask one (or many) and await the answer(s)
+    KIND_PUB = 2;   // broadcast / event, fire-and-forget
+    KIND_QUEUE = 3; // durable inbox (at-least-once + ack/nak/term)
+  }
+
+  // Protocol version. v2 (the current, multi-tenant wire).
+  optional int32 v = 1;
+  // Channel (subject) the message was published on.
+  string ch = 2;
+  // Tenant the message belongs to. MUST equal the second subject segment for
+  // every data-plane channel (easybus.<tenant>.<...>).
+  string tenant = 3;
+  // Envelope kind.
+  Kind kind = 4;
+  // Opaque business body.
+  google.protobuf.Value payload = 5;
+  // Correlation id (req/queue).
+  optional string id = 6;
+  // For a `req`: where the answer is published (transport-internal).
+  optional string reply_to = 7;
+  // Logical session the message belongs to (where relevant).
+  optional string session_name = 8;
+  // For a multi-answer `req`: how many answers are still pending.
+  optional int32 pending = 9;
+}
+
+// Code is a standard error code.
+enum Code {
+  CODE_UNSPECIFIED = 0;
+  CODE_INVALID_ARGUMENT = 1;
+  CODE_NOT_FOUND = 2;
+  CODE_PERMISSION_DENIED = 3;
+  CODE_RETRYABLE = 4;
+  CODE_BUSINESS = 5;
+  CODE_INTERNAL = 6;
+}
+
+// ErrorPayload is the standard error body.
+message ErrorPayload {
+  Code code = 1;
+  string message = 2;
+}
+
+// ObjectRef names a blob in the object store.
+message ObjectRef {
+  string id = 1;
+  optional string content_type = 2;
+}
+
+// ── tool call ───────────────────────────────────────────────────────────────
+
+// ToolCallEnvelope is the body of a tool-call `req`.
+message ToolCallEnvelope {
+  string call_id = 1;
+  // Arbitrary key/value tool arguments.
+  google.protobuf.Struct arguments = 2;
+}
+
+// ToolProgress is a progress update published during a long tool call.
+message ToolProgress {
+  string call_id = 1;
+  optional float progress = 2;
+  optional string phase = 3;
+  optional string text = 4;
+  google.protobuf.Value metadata = 5;
+}
+
+// ToolResult is the answer to a ToolCallEnvelope.
+message ToolResult {
+  string call_id = 1;
+  string tool = 2;
+  optional string content = 3;
+  google.protobuf.Value data = 4;
+  google.protobuf.Value metadata = 5;
+  ToolError error = 6;
+  ObjectRef object = 7;
+}
+
+message ToolError {
+  Code code = 1;
+  string message = 2;
+}
+
+// ── variables / config ──────────────────────────────────────────────────────
+
+// Scope is a config/variable scope.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  SCOPE_GLOBAL = 1;
+  SCOPE_SESSION = 2;
+}
+
+// ExtensionVariable describes a variable an extension exposes.
+message ExtensionVariable {
+  string name = 1;
+  optional string description = 2;
+  map<string, string> descriptions = 3;
+  Scope scope = 4;
+}
+
+// ExtensionVariableValue is a resolved variable value.
+message ExtensionVariableValue {
+  string name = 1;
+  string value = 2;
+}
+
+// ExtensionConfigItem describes one configuration knob.
+message ExtensionConfigItem {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_STRING = 1;
+    TYPE_NUMBER = 2;
+    TYPE_BOOLEAN = 3;
+    TYPE_ENUM = 4;
+    TYPE_JSON = 5;
+  }
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_VALUE = 1;
+    KIND_MODEL = 2;
+  }
+  string name = 1;
+  Type type = 2;
+  optional Kind kind = 3;
+  Scope scope = 4;
+  optional string description = 5;
+  map<string, string> descriptions = 6;
+  repeated string enum_values = 7;
+  google.protobuf.Value default = 8;
+}
+
+// ConfigSet is a request to set a config value (ack/reject).
+message ConfigSet {
+  string name = 1;
+  Scope scope = 2;
+  int32 revision = 3;
+  google.protobuf.Value value = 4;
+  optional string session_name = 5;
+  optional string tenant = 6;
+  optional bool ack = 7;
+}
+
+// ConfigSnapshot is the full applied config (global + per-session).
+message ConfigSnapshot {
+  map<string, google.protobuf.Value> global = 1;
+  map<string, google.protobuf.Value> sessions = 2;
+}
+
+// ── hooks ───────────────────────────────────────────────────────────────────
+
+message HookCall {
+  string hook = 1;
+  string session_name = 2;
+  google.protobuf.Struct arguments = 3;
+}
+
+message HookEvent {
+  string hook = 1;
+  string session_name = 2;
+  google.protobuf.Value payload = 3;
+}
+
+message HookResponse {
+  bool ok = 1;
+  google.protobuf.Value data = 2;
+  ToolError error = 3;
+}
+
+// ── lifecycle / mailbox / interrupt ─────────────────────────────────────────
+
+message LifecycleEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_CREATED = 1;
+    KIND_FORKED = 2;
+    KIND_RENAMED = 3;
+    KIND_DELETED = 4;
+  }
+  Kind kind = 1;
+  string session_name = 2;
+  optional string from = 3;
+  optional string to = 4;
+  optional string parent = 5;
+  optional string id = 6;
+  google.protobuf.Value payload = 7;
+}
+
+message MailboxMessage {
+  string id = 1;
+  // "trigger" (drives a turn), "interrupt", or "event" (context only).
+  string type = 2;
+  // ORIGIN: `user`, `session:{name}`, `system:{name}`, or extension-defined.
+  optional string source = 3;
+  google.protobuf.Value payload = 4;
+}
+
+message InterruptSignal {
+  optional string session_name = 1;
+  optional string reason = 2;
+}
+
+// ── manifest ────────────────────────────────────────────────────────────────
+
+// ExtensionTool describes a tool an extension exposes.
+message ExtensionTool {
+  string name = 1;
+  string description = 2;
+  map<string, string> descriptions = 3;
+  // JSON Schema describing tool input.
+  google.protobuf.Struct input_schema = 4;
+  repeated string required_config = 5;
+}
+
+// ExtensionManifest is an extension's self-description.
+message ExtensionManifest {
+  string id = 1;
+  string version = 2;
+  repeated string capabilities = 3;
+  repeated string features = 4;
+  repeated ExtensionConfigItem config = 5;
+  repeated ExtensionTool tools = 6;
+  repeated ExtensionVariable prompt_variables = 7;
+  repeated string lifecycle = 8;
+  HookSpec hooks = 9;
+}
+
+message HookSpec {
+  repeated string call = 1;
+  repeated string event = 2;
+  map<string, google.protobuf.Struct> call_schemas = 3;
+  map<string, google.protobuf.Struct> event_schemas = 4;
+}
