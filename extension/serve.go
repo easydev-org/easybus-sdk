@@ -26,7 +26,7 @@ type ServeOptions struct {
 	// Run starts background workers after Serve; its context is canceled on
 	// shutdown before the extension and bus close.
 	Run func(ctx context.Context, ext *Extension)
-	// Port overrides EASYBUS_PORT / ZERGX_PORT / 8080 when non-empty.
+	// Port overrides EASYBUS_PORT (default 8080) when non-empty.
 	Port string
 }
 
@@ -35,12 +35,7 @@ type ServeOptions struct {
 func Serve(ext *Extension, opts ServeOptions) error {
 	port := opts.Port
 	if port == "" {
-		// EASYBUS_PORT is the protocol-neutral name; ZERGX_PORT kept as a
-		// deployment-compat fallback for existing charts.
 		port = os.Getenv("EASYBUS_PORT")
-	}
-	if port == "" {
-		port = os.Getenv("ZERGX_PORT")
 	}
 	if port == "" {
 		port = "8080"
