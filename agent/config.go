@@ -148,8 +148,8 @@ func (c *ConfigAuthority) set(ctx context.Context, tenant, extID, name string, v
 	if item == nil {
 		return &ConfigError{Code: "not_found", Message: fmt.Sprintf("config %s not declared by %s", name, extID)}
 	}
-	scope := "session"
-	if item.Scope == easybus.ScopeGlobal {
+	scope := item.Scope
+	if scope == "" {
 		scope = "global"
 	}
 	if scope == "session" && sessionName == "" {
@@ -204,7 +204,7 @@ func (c *ConfigAuthority) set(ctx context.Context, tenant, extID, name string, v
 		Name:     name,
 		Value:    easybus.Value(value),
 		Revision: int32(revision),
-		Scope:    easybus.ScopeFromString(scope),
+		Scope:    scope,
 		Ack:      &ackVal,
 		Tenant:   &tenantVal,
 	}
@@ -297,7 +297,7 @@ func configKVKey(tenant, extID, scope, sessionName, name string) string {
 }
 
 func validateConfigValue(item *easybus.ExtensionConfigItem, value any) string {
-	switch easybus.ConfigTypeString(item.Type) {
+	switch item.Type {
 	case "string":
 		if _, ok := value.(string); !ok {
 			return fmt.Sprintf("expected string, got %T", value)

@@ -52,7 +52,12 @@ type Agent struct {
 	// all have expired (or been deleted).
 	livePresenceKeys map[string]map[string]bool
 	presenceMu       sync.Mutex
-	presenceOnce     sync.Once
+	// presenceStartMu guards presenceStarted, which is set once the presence
+	// watcher is running. It is NOT a sync.Once: a failed start must be
+	// retryable, and reassigning a sync.Once inside its own Do() panics
+	// ("sync: unlock of unlocked mutex") because Do holds the Once's mutex.
+	presenceStartMu sync.Mutex
+	presenceStarted bool
 }
 
 func New(b bus.Bus) *Agent {
@@ -133,22 +138,28 @@ func (a *Agent) Discover(ctx context.Context, maxWaitMs int) ([]*easybus.Extensi
 // LAST of its replica keys has expired — a single replica going away must not
 // evict the extension while siblings are still alive.
 func (a *Agent) ensurePresence(ctx context.Context) {
-	a.presenceOnce.Do(func() {
-		ch, stop, err := a.b.KvWatch(ctx, extension.PresenceBucket, ">")
-		if err != nil {
-			a.presenceOnce = sync.Once{} // allow a later retry
-			return
-		}
-		go func() {
-			for ev := range ch {
-				if ev.Key == "" {
-					continue
-				}
-				a.applyPresenceEvent(ev)
+	a.presenceStartMu.Lock()
+	defer a.presenceStartMu.Unlock()
+	if a.presenceStarted {
+		return
+	}
+	ch, stop, err := a.b.KvWatch(ctx, extension.PresenceBucket, ">")
+	if err != nil {
+		// Leave presenceStarted false so a later Discover retries — e.g. once
+		// the presence bucket exists. (Holding the lock across KvWatch keeps a
+		// second caller from starting a duplicate watcher.)
+		return
+	}
+	a.presenceStarted = true
+	go func() {
+		for ev := range ch {
+			if ev.Key == "" {
+				continue
 			}
-		}()
-		_ = stop
-	})
+			a.applyPresenceEvent(ev)
+		}
+	}()
+	_ = stop
 }
 
 // applyPresenceEvent folds one presence KV event into the cache, tracking
@@ -210,7 +221,7 @@ func (a *Agent) CallTool(ctx context.Context, tenant, sessionName, extID, tool, 
 	if !protocol.Coerce(reply.Payload, &tr) {
 		return ToolResult{}, fmt.Errorf("tool %q: invalid result", tool)
 	}
-	r := ToolResult{Data: tr.Data, Metadata: tr.Metadata}
+	r := ToolResult{Data: easybus.ValueInterface(tr.Data), Metadata: easybus.ValueInterface(tr.Metadata)}
 	if tr.Content != nil {
 		r.Content = *tr.Content
 	}

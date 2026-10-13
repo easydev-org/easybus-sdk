@@ -38,12 +38,9 @@ type (
 
 // Enum types (aliases to the generated enum types).
 type (
-	EnvelopeKind        = easybusv1.Envelope_Kind
-	LifecycleEventKind  = easybusv1.LifecycleEvent_Kind
-	ErrorCode           = easybusv1.Code
-	Scope               = easybusv1.Scope
-	ExtensionConfigType = easybusv1.ExtensionConfigItem_Type
-	ExtensionConfigKind = easybusv1.ExtensionConfigItem_Kind
+	EnvelopeKind       = easybusv1.Envelope_Kind
+	LifecycleEventKind = easybusv1.LifecycleEvent_Kind
+	ErrorCode          = easybusv1.Code
 )
 
 // Envelope kinds.
@@ -71,22 +68,20 @@ const (
 	ErrorCodeInternal         = easybusv1.Code_CODE_INTERNAL
 )
 
-// Scopes.
+// Scopes, config types and config kinds are open strings (authored in the
+// manifest), so these are plain string constants.
 const (
-	ScopeGlobal  = easybusv1.Scope_SCOPE_GLOBAL
-	ScopeSession = easybusv1.Scope_SCOPE_SESSION
-)
+	ScopeGlobal  = "global"
+	ScopeSession = "session"
 
-// Config types / kinds.
-const (
-	ConfigItemString  = easybusv1.ExtensionConfigItem_TYPE_STRING
-	ConfigItemNumber  = easybusv1.ExtensionConfigItem_TYPE_NUMBER
-	ConfigItemBoolean = easybusv1.ExtensionConfigItem_TYPE_BOOLEAN
-	ConfigItemEnum    = easybusv1.ExtensionConfigItem_TYPE_ENUM
-	ConfigItemJSON    = easybusv1.ExtensionConfigItem_TYPE_JSON
+	ConfigItemString  = "string"
+	ConfigItemNumber  = "number"
+	ConfigItemBoolean = "boolean"
+	ConfigItemEnum    = "enum"
+	ConfigItemJSON    = "json"
 
-	ConfigKindValue = easybusv1.ExtensionConfigItem_KIND_VALUE
-	ConfigKindModel = easybusv1.ExtensionConfigItem_KIND_MODEL
+	ConfigKindValue = "value"
+	ConfigKindModel = "model"
 )
 
 // Manifest capability names are open strings.
@@ -101,36 +96,21 @@ const (
 // HookResponseErrorCode, ...). Proto unifies them (Scope, Code, ...), so these
 // aliases map the old names onto the unified enums.
 type (
-	ConfigSetScope                        = easybusv1.Scope
-	ExtensionVariableScope                = easybusv1.Scope
-	ExtensionConfigItemScope              = easybusv1.Scope
-	ExtensionManifestConfigScope          = easybusv1.Scope
-	ExtensionManifestPromptVariablesScope = easybusv1.Scope
-	ExtensionConfigItemType               = easybusv1.ExtensionConfigItem_Type
-	ExtensionManifestConfigType           = easybusv1.ExtensionConfigItem_Type
-	ExtensionConfigItemKind               = easybusv1.ExtensionConfigItem_Kind
-	ExtensionManifestConfigKind           = easybusv1.ExtensionConfigItem_Kind
-	ErrorPayloadCode                      = easybusv1.Code
-	HookResponseErrorCode                 = easybusv1.Code
-	ToolResultErrorCode                   = easybusv1.Code
-	// Manifest capabilities + lifecycle kinds are open strings in the proto
-	// (the manifest schema is intentionally extensible), so a plain string.
-	ExtensionManifestCapabilities               = string
-	ExtensionManifestLifecycle                  = string
-	ExtensionManifestConfigCapability           = string
-	ExtensionManifestPromptVariablesScopeString = string
+	ErrorPayloadCode      = easybusv1.Code
+	HookResponseErrorCode = easybusv1.Code
+	ToolResultErrorCode   = easybusv1.Code
 )
 
 // Legacy enum constants (lower-case wire names map here).
 const (
-	ConfigSetScopeGlobal  = easybusv1.Scope_SCOPE_GLOBAL
-	ConfigSetScopeSession = easybusv1.Scope_SCOPE_SESSION
+	ConfigSetScopeGlobal  = "global"
+	ConfigSetScopeSession = "session"
 
-	ExtensionConfigItemTypeString  = easybusv1.ExtensionConfigItem_TYPE_STRING
-	ExtensionConfigItemTypeNumber  = easybusv1.ExtensionConfigItem_TYPE_NUMBER
-	ExtensionConfigItemTypeBoolean = easybusv1.ExtensionConfigItem_TYPE_BOOLEAN
-	ExtensionConfigItemTypeEnum    = easybusv1.ExtensionConfigItem_TYPE_ENUM
-	ExtensionConfigItemTypeJson    = easybusv1.ExtensionConfigItem_TYPE_JSON
+	ExtensionConfigItemTypeString  = "string"
+	ExtensionConfigItemTypeNumber  = "number"
+	ExtensionConfigItemTypeBoolean = "boolean"
+	ExtensionConfigItemTypeEnum    = "enum"
+	ExtensionConfigItemTypeJson    = "json"
 
 	HookResponseErrorCodeInvalidArgument  = easybusv1.Code_CODE_INVALID_ARGUMENT
 	HookResponseErrorCodeNotFound         = easybusv1.Code_CODE_NOT_FOUND
@@ -200,66 +180,6 @@ func EnvelopeKindFromString(s string) easybusv1.Envelope_Kind {
 		return easybusv1.Envelope_KIND_QUEUE
 	}
 	return easybusv1.Envelope_KIND_UNSPECIFIED
-}
-
-// ConfigTypeFromString maps the manifest's config type string to the enum.
-func ConfigTypeFromString(s string) easybusv1.ExtensionConfigItem_Type {
-	switch s {
-	case "string":
-		return easybusv1.ExtensionConfigItem_TYPE_STRING
-	case "number":
-		return easybusv1.ExtensionConfigItem_TYPE_NUMBER
-	case "boolean":
-		return easybusv1.ExtensionConfigItem_TYPE_BOOLEAN
-	case "enum":
-		return easybusv1.ExtensionConfigItem_TYPE_ENUM
-	case "json":
-		return easybusv1.ExtensionConfigItem_TYPE_JSON
-	}
-	return easybusv1.ExtensionConfigItem_TYPE_UNSPECIFIED
-}
-
-// ConfigTypeString renders a config type as its manifest string.
-func ConfigTypeString(t easybusv1.ExtensionConfigItem_Type) string {
-	switch t {
-	case easybusv1.ExtensionConfigItem_TYPE_STRING:
-		return "string"
-	case easybusv1.ExtensionConfigItem_TYPE_NUMBER:
-		return "number"
-	case easybusv1.ExtensionConfigItem_TYPE_BOOLEAN:
-		return "boolean"
-	case easybusv1.ExtensionConfigItem_TYPE_ENUM:
-		return "enum"
-	case easybusv1.ExtensionConfigItem_TYPE_JSON:
-		return "json"
-	}
-	return ""
-}
-
-// ConfigKindString renders a config kind as its manifest string.
-func ConfigKindString(k easybusv1.ExtensionConfigItem_Kind) string {
-	if k == easybusv1.ExtensionConfigItem_KIND_MODEL {
-		return "model"
-	}
-	return "value"
-}
-
-// ConfigKindFromString maps the manifest's config kind string to the enum.
-func ConfigKindFromString(s string) easybusv1.ExtensionConfigItem_Kind {
-	switch s {
-	case "model":
-		return easybusv1.ExtensionConfigItem_KIND_MODEL
-	default:
-		return easybusv1.ExtensionConfigItem_KIND_VALUE
-	}
-}
-
-// ScopeFromString maps "global"/"session" to the scope enum.
-func ScopeFromString(s string) easybusv1.Scope {
-	if s == "session" {
-		return easybusv1.Scope_SCOPE_SESSION
-	}
-	return easybusv1.Scope_SCOPE_GLOBAL
 }
 
 // ── payload helpers (opaque JSON bodies are structpb.Value on the wire) ──────

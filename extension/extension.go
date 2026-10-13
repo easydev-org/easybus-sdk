@@ -190,6 +190,13 @@ type Extension struct {
 	inflight   map[string]map[string]context.CancelFunc
 }
 
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
 func New(b bus.Bus, cfg Config) *Extension {
 	e := &Extension{
 		b:           b,
@@ -221,7 +228,7 @@ func New(b bus.Bus, cfg Config) *Extension {
 		}
 		for name, spec := range cfg.Variables {
 			d := spec.Description
-			v := &easybus.ExtensionVariable{Name: name, Scope: easybus.ScopeFromString(spec.Scope)}
+			v := &easybus.ExtensionVariable{Name: name, Scope: orDefault(spec.Scope, "global")}
 			if d != "" {
 				v.Description = &d
 			}
@@ -235,9 +242,9 @@ func New(b bus.Bus, cfg Config) *Extension {
 		for name, spec := range cfg.Config {
 			item := &easybus.ExtensionConfigItem{
 				Name: name,
-				Type: easybus.ConfigTypeFromString(spec.Type),
+				Type: spec.Type,
 			}
-			k := easybus.ConfigKindFromString(spec.Kind)
+			k := orDefault(spec.Kind, "value")
 			item.Kind = &k
 			if spec.Capability != "" {
 				cap := spec.Capability
@@ -254,7 +261,7 @@ func New(b bus.Bus, cfg Config) *Extension {
 			if spec.Default != nil {
 				item.Default = easybus.Value(spec.Default)
 			}
-			item.Scope = easybus.ScopeFromString(spec.Scope)
+			item.Scope = orDefault(spec.Scope, "global")
 			e.manifest.Config = append(e.manifest.Config, item)
 		}
 	}
@@ -640,11 +647,12 @@ func (e *Extension) serveEventHooks(ctx context.Context) error {
 				if tenant == "" {
 					tenant = protocol.SubjectTenant(env.Ch)
 				}
-				if msg := validateHookSchema(e.cfg.HookSchemas.Event[hook], ev.Payload, "payload"); msg != "" {
+				evPayload := ev.Payload.AsInterface()
+				if msg := validateHookSchema(e.cfg.HookSchemas.Event[hook], evPayload, "payload"); msg != "" {
 					continue // invalid event payload: drop (best-effort)
 				}
 				if e.cfg.OnEventHook != nil {
-					_ = e.cfg.OnEventHook(ctx, hook, sessionName, ev.Payload, tenant)
+					_ = e.cfg.OnEventHook(ctx, hook, sessionName, evPayload, tenant)
 				}
 			}
 		}(hook, sub)

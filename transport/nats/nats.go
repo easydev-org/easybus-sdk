@@ -166,7 +166,7 @@ func (b *Bus) verifyMsg(m *nats.Msg, raw *rawEnvelope) bool {
 		id = *raw.ID
 	}
 	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret,
-		identity.Fields{Tenant: raw.Tenant, Ch: m.Subject, Kind: raw.Kind, ID: id, Payload: raw.Payload.AsInterface()}, sig)
+		identity.Fields{Tenant: raw.Tenant, Ch: m.Subject, Kind: raw.Kind, ID: id, Payload: json.RawMessage(raw.Payload)}, sig)
 }
 
 // envelopeTenant reads just the tenant field out of an already-encoded
@@ -264,7 +264,7 @@ type rawEnvelope struct {
 	ID          *string         `json:"id,omitempty"`
 	SessionName *string         `json:"session_name,omitempty"`
 	ReplyTo     *string         `json:"reply_to,omitempty"`
-	Payload     *structpb.Value `json:"payload,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
 func decode(m *nats.Msg) (*easybus.Envelope, error) {
@@ -282,6 +282,13 @@ func decode(m *nats.Msg) (*easybus.Envelope, error) {
 		return nil, fmt.Errorf("envelope tenant %q != subject tenant %q on %s", raw.Tenant, expected, m.Subject)
 	}
 	v := int32(raw.V)
+	var payload *structpb.Value
+	if len(raw.Payload) > 0 {
+		payload = &structpb.Value{}
+		if json.Unmarshal(raw.Payload, payload) != nil {
+			payload = nil
+		}
+	}
 	env := &easybus.Envelope{
 		V:           &v,
 		Tenant:      raw.Tenant,
@@ -289,7 +296,7 @@ func decode(m *nats.Msg) (*easybus.Envelope, error) {
 		Kind:        easybus.EnvelopeKindFromString(raw.Kind),
 		Id:          raw.ID,
 		SessionName: raw.SessionName,
-		Payload:     raw.Payload,
+		Payload:     payload,
 	}
 	if m.Reply != "" {
 		env.ReplyTo = &m.Reply

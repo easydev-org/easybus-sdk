@@ -110,19 +110,21 @@ message ToolError {
 
 // ── variables / config ──────────────────────────────────────────────────────
 
-// Scope is a config/variable scope.
-enum Scope {
-  SCOPE_UNSPECIFIED = 0;
-  SCOPE_GLOBAL = 1;
-  SCOPE_SESSION = 2;
-}
+// NOTE on "authoring" enums: config type/kind and scope are authored by hand
+// (in the extension manifest YAML) and carried as JSON, so they are open
+// strings with documented values, not proto enums — proto3 JSON would require
+// the enum NAME ("TYPE_STRING") where authors write "string". Values:
+//   type:  string | number | boolean | enum | json
+//   kind:  value | model
+//   scope: global | session
 
 // ExtensionVariable describes a variable an extension exposes.
 message ExtensionVariable {
   string name = 1;
   optional string description = 2;
   map<string, string> descriptions = 3;
-  Scope scope = 4;
+  // scope: global | session
+  string scope = 4;
 }
 
 // ExtensionVariableValue is a resolved variable value.
@@ -133,28 +135,18 @@ message ExtensionVariableValue {
 
 // ExtensionConfigItem describes one configuration knob.
 message ExtensionConfigItem {
-  enum Type {
-    TYPE_UNSPECIFIED = 0;
-    TYPE_STRING = 1;
-    TYPE_NUMBER = 2;
-    TYPE_BOOLEAN = 3;
-    TYPE_ENUM = 4;
-    TYPE_JSON = 5;
-  }
-  enum Kind {
-    KIND_UNSPECIFIED = 0;
-    KIND_VALUE = 1;
-    KIND_MODEL = 2;
-  }
   string name = 1;
-  Type type = 2;
-  optional Kind kind = 3;
-  Scope scope = 4;
+  // type: string | number | boolean | enum | json
+  string type = 2;
+  // kind: value (default) | model
+  optional string kind = 3;
+  // scope: global | session
+  string scope = 4;
   optional string description = 5;
   map<string, string> descriptions = 6;
   repeated string enum_values = 7;
   google.protobuf.Value default = 8;
-  // Capability is REQUIRED when kind == MODEL (the modality a model picker is
+  // Capability is REQUIRED when kind == model (the modality a model picker is
   // scoped to). Open string: text/image/embedding/... .
   optional string capability = 9;
 }
@@ -162,7 +154,8 @@ message ExtensionConfigItem {
 // ConfigSet is a request to set a config value (ack/reject).
 message ConfigSet {
   string name = 1;
-  Scope scope = 2;
+  // scope: global | session
+  string scope = 2;
   int32 revision = 3;
   google.protobuf.Value value = 4;
   optional string session_name = 5;
