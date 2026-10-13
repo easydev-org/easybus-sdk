@@ -25,7 +25,7 @@ const (
 )
 
 // LifecycleSuccessFunc is called once per published lifecycle event.
-type LifecycleSuccessFunc func(ctx context.Context, ev easybus.LifecycleEvent) (bool, error)
+type LifecycleSuccessFunc func(ctx context.Context, ev *easybus.LifecycleEvent) (bool, error)
 
 // LifecyclePublishOpts carries bus publish options.
 type LifecyclePublishOpts struct {
@@ -39,11 +39,11 @@ type LifecyclePublishOpts struct {
 // uses the durable inbox publish path (at-least-once).
 func LifecyclePublish(ctx context.Context, b bus.Bus, tenant string, kind easybus.LifecycleEventKind, sessionName string, payload any, opts LifecyclePublishOpts) error {
 	id := protocol.NewID()
-	ev := easybus.LifecycleEvent{
+	ev := &easybus.LifecycleEvent{
 		Id:          &id,
 		Kind:        kind,
 		SessionName: sessionName,
-		Payload:     payload,
+		Payload:     easybus.Value(payload),
 	}
 	if kind == easybus.LifecycleEventKindRenamed {
 		if m, ok := payload.(map[string]any); ok {
@@ -64,7 +64,7 @@ func LifecyclePublish(ctx context.Context, b bus.Bus, tenant string, kind easybu
 			}
 		}
 	}
-	ch := protocol.ChLifecycle(tenant, string(kind))
+	ch := protocol.ChLifecycle(tenant, easybus.LifecycleKindString(kind))
 	if opts.Inbox {
 		return b.InboxPublish(ctx, ch, ev, bus.InboxPublishOpts{ID: id, Tenant: tenant})
 	}
@@ -80,32 +80,32 @@ type LifecycleConsumerSubscription struct {
 
 // LifecycleHandlers routes each lifecycle event to per-kind callbacks.
 type lifecycleHandlers struct {
-	created func(ctx context.Context, ev easybus.LifecycleEvent) error
-	forked  func(ctx context.Context, ev easybus.LifecycleEvent) error
-	renamed func(ctx context.Context, ev easybus.LifecycleEvent) error
-	deleted func(ctx context.Context, ev easybus.LifecycleEvent) error
+	created func(ctx context.Context, ev *easybus.LifecycleEvent) error
+	forked  func(ctx context.Context, ev *easybus.LifecycleEvent) error
+	renamed func(ctx context.Context, ev *easybus.LifecycleEvent) error
+	deleted func(ctx context.Context, ev *easybus.LifecycleEvent) error
 }
 
 // LifecycleHandlersOption configures a LifecycleConsumer.
 type LifecycleHandlersOption func(*lifecycleHandlers)
 
 // WithLifecycleCreated sets the created handler.
-func WithLifecycleCreated(fn func(ctx context.Context, ev easybus.LifecycleEvent) error) LifecycleHandlersOption {
+func WithLifecycleCreated(fn func(ctx context.Context, ev *easybus.LifecycleEvent) error) LifecycleHandlersOption {
 	return func(h *lifecycleHandlers) { h.created = fn }
 }
 
 // WithLifecycleForked sets the forked handler.
-func WithLifecycleForked(fn func(ctx context.Context, ev easybus.LifecycleEvent) error) LifecycleHandlersOption {
+func WithLifecycleForked(fn func(ctx context.Context, ev *easybus.LifecycleEvent) error) LifecycleHandlersOption {
 	return func(h *lifecycleHandlers) { h.forked = fn }
 }
 
 // WithLifecycleRenamed sets the renamed handler.
-func WithLifecycleRenamed(fn func(ctx context.Context, ev easybus.LifecycleEvent) error) LifecycleHandlersOption {
+func WithLifecycleRenamed(fn func(ctx context.Context, ev *easybus.LifecycleEvent) error) LifecycleHandlersOption {
 	return func(h *lifecycleHandlers) { h.renamed = fn }
 }
 
 // WithLifecycleDeleted sets the deleted handler.
-func WithLifecycleDeleted(fn func(ctx context.Context, ev easybus.LifecycleEvent) error) LifecycleHandlersOption {
+func WithLifecycleDeleted(fn func(ctx context.Context, ev *easybus.LifecycleEvent) error) LifecycleHandlersOption {
 	return func(h *lifecycleHandlers) { h.deleted = fn }
 }
 
@@ -150,7 +150,7 @@ func (s *LifecycleConsumerSubscription) loop(ctx context.Context) {
 	}
 }
 
-func (s *LifecycleConsumerSubscription) dispatch(ctx context.Context, ev easybus.LifecycleEvent) error {
+func (s *LifecycleConsumerSubscription) dispatch(ctx context.Context, ev *easybus.LifecycleEvent) error {
 	switch ev.Kind {
 	case easybus.LifecycleEventKindCreated:
 		if s.handlers.created != nil {
@@ -174,14 +174,14 @@ func (s *LifecycleConsumerSubscription) dispatch(ctx context.Context, ev easybus
 	return nil
 }
 
-func decodeLifecyclePayload(v any) easybus.LifecycleEvent {
+func decodeLifecyclePayload(v any) *easybus.LifecycleEvent {
 	if m, ok := v.(map[string]any); ok {
-		ev := easybus.LifecycleEvent{}
+		ev := &easybus.LifecycleEvent{}
 		if id, ok := m["id"].(string); ok {
 			ev.Id = &id
 		}
 		if k, ok := m["kind"].(string); ok {
-			ev.Kind = easybus.LifecycleEventKind(k)
+			ev.Kind = easybus.LifecycleKindFromString(k)
 		}
 		if sn, ok := m["session_name"].(string); ok {
 			ev.SessionName = sn
@@ -195,14 +195,14 @@ func decodeLifecyclePayload(v any) easybus.LifecycleEvent {
 		if t, ok := m["to"].(string); ok {
 			ev.To = &t
 		}
-		ev.Payload = m["payload"]
+		ev.Payload = easybus.Value(m["payload"])
 		return ev
 	}
 	var ev easybus.LifecycleEvent
 	if s, ok := v.(string); ok {
 		_ = json.Unmarshal([]byte(s), &ev)
 	}
-	return ev
+	return &ev
 }
 
 // Close stops the subscription.

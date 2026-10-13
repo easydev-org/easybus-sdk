@@ -13,6 +13,7 @@ import (
 	"github.com/easydev-org/easybus-sdk/identity"
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -165,7 +166,7 @@ func (b *Bus) verifyMsg(m *nats.Msg, raw *rawEnvelope) bool {
 		id = *raw.ID
 	}
 	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret,
-		identity.Fields{Tenant: raw.Tenant, Ch: m.Subject, Kind: raw.Kind, ID: id, Payload: json.RawMessage(raw.Payload)}, sig)
+		identity.Fields{Tenant: raw.Tenant, Ch: m.Subject, Kind: raw.Kind, ID: id, Payload: raw.Payload.AsInterface()}, sig)
 }
 
 // envelopeTenant reads just the tenant field out of an already-encoded
@@ -263,29 +264,29 @@ type rawEnvelope struct {
 	ID          *string         `json:"id,omitempty"`
 	SessionName *string         `json:"session_name,omitempty"`
 	ReplyTo     *string         `json:"reply_to,omitempty"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
+	Payload     *structpb.Value `json:"payload,omitempty"`
 }
 
-func decode(m *nats.Msg) (easybus.Envelope, error) {
+func decode(m *nats.Msg) (*easybus.Envelope, error) {
 	var raw rawEnvelope
 	if err := json.Unmarshal(m.Data, &raw); err != nil {
-		return easybus.Envelope{}, err
+		return nil, err
 	}
 	// v2 is a breaking layout change: reject anything that is not v2.
 	if raw.V != 2 {
 		log.Printf("[easybus] rejecting envelope version %d on %s (this build speaks v2)", raw.V, raw.Ch)
-		return easybus.Envelope{}, fmt.Errorf("unsupported envelope version %d", raw.V)
+		return nil, fmt.Errorf("unsupported envelope version %d", raw.V)
 	}
 	// Envelope tenant must agree with the subject's tenant segment.
 	if expected := protocol.SubjectTenant(m.Subject); expected != "" && raw.Tenant != expected {
-		return easybus.Envelope{}, fmt.Errorf("envelope tenant %q != subject tenant %q on %s", raw.Tenant, expected, m.Subject)
+		return nil, fmt.Errorf("envelope tenant %q != subject tenant %q on %s", raw.Tenant, expected, m.Subject)
 	}
-	v := raw.V
-	env := easybus.Envelope{
+	v := int32(raw.V)
+	env := &easybus.Envelope{
 		V:           &v,
 		Tenant:      raw.Tenant,
 		Ch:          raw.Ch,
-		Kind:        easybus.EnvelopeKind(raw.Kind),
+		Kind:        easybus.EnvelopeKindFromString(raw.Kind),
 		Id:          raw.ID,
 		SessionName: raw.SessionName,
 		Payload:     raw.Payload,
@@ -296,10 +297,10 @@ func decode(m *nats.Msg) (easybus.Envelope, error) {
 	return env, nil
 }
 
-func (b *Bus) Request(ctx context.Context, ch string, payload any, opts bus.RequestOpts) (easybus.Envelope, error) {
+func (b *Bus) Request(ctx context.Context, ch string, payload any, opts bus.RequestOpts) (*easybus.Envelope, error) {
 	data, err := buildEnvelope("req", ch, payload, tenantOf(ch, opts.Tenant), "", opts.SessionName, "")
 	if err != nil {
-		return easybus.Envelope{}, err
+		return nil, err
 	}
 	// TimeoutMs > 0 bounds the request; 0 means no timeout (ctx only).
 	var cancel context.CancelFunc
@@ -314,24 +315,24 @@ func (b *Bus) Request(ctx context.Context, ch string, payload any, opts bus.Requ
 		b.signMsg(rm, ch, "req", "", payload)
 		m, err = b.nc.RequestMsgWithContext(ctx, rm)
 		if err != nil {
-			return easybus.Envelope{}, err
+			return nil, err
 		}
 	} else {
 		m, err = b.nc.RequestWithContext(ctx, ch, data)
 		if err != nil {
-			return easybus.Envelope{}, err
+			return nil, err
 		}
 	}
 	if b.idn != nil {
 		var raw rawEnvelope
 		if json.Unmarshal(m.Data, &raw) == nil && !b.verifyMsg(m, &raw) {
-			return easybus.Envelope{}, fmt.Errorf("identity: signature verification failed on %s", m.Subject)
+			return nil, fmt.Errorf("identity: signature verification failed on %s", m.Subject)
 		}
 	}
 	return decode(m)
 }
 
-func (b *Bus) RequestMany(ctx context.Context, ch string, payload any, opts bus.RequestOpts) ([]easybus.Envelope, error) {
+func (b *Bus) RequestMany(ctx context.Context, ch string, payload any, opts bus.RequestOpts) ([]*easybus.Envelope, error) {
 	data, err := buildEnvelope("req", ch, payload, tenantOf(ch, opts.Tenant), "", "", "")
 	if err != nil {
 		return nil, err
@@ -357,7 +358,7 @@ func (b *Bus) RequestMany(ctx context.Context, ch string, payload any, opts bus.
 	if maxWait == 0 {
 		maxWait = 500
 	}
-	out := []easybus.Envelope{}
+	out := []*easybus.Envelope{}
 	for {
 		m, err := sub.NextMsg(time.Duration(maxWait) * time.Millisecond)
 		if err != nil {
@@ -417,20 +418,20 @@ type natsSub struct {
 	bus *Bus
 }
 
-func (s *natsSub) Next(ctx context.Context) (easybus.Envelope, bool) {
+func (s *natsSub) Next(ctx context.Context) (*easybus.Envelope, bool) {
 	m, err := s.sub.NextMsgWithContext(ctx)
 	if err != nil {
-		return easybus.Envelope{}, false
+		return nil, false
 	}
 	if s.bus.idn != nil {
 		var raw rawEnvelope
 		if json.Unmarshal(m.Data, &raw) == nil && !s.bus.verifyMsg(m, &raw) {
-			return easybus.Envelope{}, false // bad/missing signature: drop
+			return nil, false // bad/missing signature: drop
 		}
 	}
 	env, err := decode(m)
 	if err != nil {
-		return easybus.Envelope{}, false
+		return nil, false
 	}
 	return env, true
 }
@@ -679,8 +680,8 @@ func (b *Bus) KVDelete(ctx context.Context, bucket, key string) error {
 
 // Replay returns the retained envelopes for a channel (JetStream stream
 // contents, oldest first). Backs session-events replay.
-func (b *Bus) Replay(ctx context.Context, ch string) ([]easybus.Envelope, error) {
-	out := []easybus.Envelope{}
+func (b *Bus) Replay(ctx context.Context, ch string) ([]*easybus.Envelope, error) {
+	out := []*easybus.Envelope{}
 	// Find the stream covering this subject.
 	for _, info := range []string{streamEvents, streamMailbox, streamDLQ} {
 		si, err := b.js.StreamInfo(info)

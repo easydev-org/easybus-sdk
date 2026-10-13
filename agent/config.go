@@ -32,7 +32,7 @@ type ConfigAuthority struct {
 	bus        bus.Bus
 	defaultAck bool
 
-	declarations map[string]map[string][]easybus.ExtensionConfigItem     // tenant -> extId -> items
+	declarations map[string]map[string][]*easybus.ExtensionConfigItem    // tenant -> extId -> items
 	global       map[string]map[string]map[string]configValue            // tenant -> extId -> name -> v
 	sessions     map[string]map[string]map[string]map[string]configValue // tenant -> extId -> session -> name -> v
 	cancel       context.CancelFunc
@@ -46,7 +46,7 @@ func (a *Agent) ServeConfig(defaultAck bool) error {
 		a.configAuthority = &ConfigAuthority{
 			bus:          a.b,
 			defaultAck:   defaultAck,
-			declarations: map[string]map[string][]easybus.ExtensionConfigItem{},
+			declarations: map[string]map[string][]*easybus.ExtensionConfigItem{},
 			global:       map[string]map[string]map[string]configValue{},
 			sessions:     map[string]map[string]map[string]map[string]configValue{},
 		}
@@ -85,25 +85,14 @@ func (a *Agent) SetConfig(ctx context.Context, tenant, extID, name string, value
 
 func (c *ConfigAuthority) declare(tenant string, m *easybus.ExtensionManifest) {
 	if c.declarations[tenant] == nil {
-		c.declarations[tenant] = map[string][]easybus.ExtensionConfigItem{}
+		c.declarations[tenant] = map[string][]*easybus.ExtensionConfigItem{}
 	}
 	if m.Config == nil {
 		c.declarations[tenant][m.Id] = nil
 		return
 	}
-	// The manifest embeds a structurally identical (generated) config item
-	// type; re-encode into the standalone ExtensionConfigItem shape.
-	raw, err := json.Marshal(*m.Config)
-	if err != nil {
-		c.declarations[tenant][m.Id] = nil
-		return
-	}
-	var items []easybus.ExtensionConfigItem
-	if json.Unmarshal(raw, &items) != nil {
-		c.declarations[tenant][m.Id] = nil
-		return
-	}
-	c.declarations[tenant][m.Id] = items
+	// The manifest already carries the config items directly.
+	c.declarations[tenant][m.Id] = m.Config
 	c.recover(tenant, m.Id)
 }
 
@@ -150,18 +139,18 @@ func (c *ConfigAuthority) recover(tenant, extID string) {
 func (c *ConfigAuthority) set(ctx context.Context, tenant, extID, name string, value any, sessionName string, ack *bool) error {
 	var item *easybus.ExtensionConfigItem
 	items := c.declarations[tenant][extID]
-	for i := range items {
-		if items[i].Name == name {
-			item = &items[i]
+	for _, it := range items {
+		if it.Name == name {
+			item = it
 			break
 		}
 	}
 	if item == nil {
 		return &ConfigError{Code: "not_found", Message: fmt.Sprintf("config %s not declared by %s", name, extID)}
 	}
-	scope := string(easybus.ExtensionConfigItemScopeGlobal)
-	if item.Scope != nil {
-		scope = string(*item.Scope)
+	scope := "session"
+	if item.Scope == easybus.ScopeGlobal {
+		scope = "global"
 	}
 	if scope == "session" && sessionName == "" {
 		return &ConfigError{Code: "invalid_argument", Message: fmt.Sprintf("config %s requires a session name (scope=session)", name)}
@@ -213,9 +202,9 @@ func (c *ConfigAuthority) set(ctx context.Context, tenant, extID, name string, v
 	tenantVal := tenant
 	setPayload := easybus.ConfigSet{
 		Name:     name,
-		Value:    value,
-		Revision: int(revision),
-		Scope:    easybus.ConfigSetScope(scope),
+		Value:    easybus.Value(value),
+		Revision: int32(revision),
+		Scope:    easybus.ScopeFromString(scope),
 		Ack:      &ackVal,
 		Tenant:   &tenantVal,
 	}
@@ -232,7 +221,7 @@ func (c *ConfigAuthority) set(ctx context.Context, tenant, extID, name string, v
 	if sessionName != "" {
 		reqOpts.SessionName = sessionName
 	}
-	reply, err := c.bus.Request(ctx, protocol.ChConfig(tenant, extID), setPayload, reqOpts)
+	reply, err := c.bus.Request(ctx, protocol.ChConfig(tenant, extID), &setPayload, reqOpts)
 	if err != nil {
 		// Delivery is best-effort in the 0.2 model: the value is already
 		// committed to the cfg KV bucket (the source of truth), so an
@@ -294,8 +283,10 @@ func (c *ConfigAuthority) fillSnapshot(tenant, extID string, snap *easybus.Confi
 		}
 		sessions[sess] = rec
 	}
-	snap.Global = g
-	snap.Sessions = sessions
+	for name, v := range g {
+		snap.Global[name] = easybus.Value(v)
+	}
+	snap.Sessions = easybus.Value(sessions)
 }
 
 func configKVKey(tenant, extID, scope, sessionName, name string) string {
@@ -306,7 +297,7 @@ func configKVKey(tenant, extID, scope, sessionName, name string) string {
 }
 
 func validateConfigValue(item *easybus.ExtensionConfigItem, value any) string {
-	switch string(item.Type) {
+	switch easybus.ConfigTypeString(item.Type) {
 	case "string":
 		if _, ok := value.(string); !ok {
 			return fmt.Sprintf("expected string, got %T", value)
@@ -327,7 +318,7 @@ func validateConfigValue(item *easybus.ExtensionConfigItem, value any) string {
 			return fmt.Sprintf("expected enum string, got %T", value)
 		}
 		if item.EnumValues != nil {
-			for _, allowed := range *item.EnumValues {
+			for _, allowed := range item.EnumValues {
 				if allowed == s {
 					return ""
 				}
@@ -346,19 +337,15 @@ func validateConfigValue(item *easybus.ExtensionConfigItem, value any) string {
 func (a *Agent) manifest(extID string) *easybus.ExtensionManifest {
 	a.presenceMu.Lock()
 	defer a.presenceMu.Unlock()
-	if m, ok := a.manifestCache[extID]; ok {
-		m2 := m
-		return &m2
-	}
-	return nil
+	return a.manifestCache[extID]
 }
 
 // initManifestCache keeps manifests discovered via Discover() for SetConfig.
-func (a *Agent) cacheManifest(m easybus.ExtensionManifest) {
+func (a *Agent) cacheManifest(m *easybus.ExtensionManifest) {
 	a.presenceMu.Lock()
 	defer a.presenceMu.Unlock()
 	if a.manifestCache == nil {
-		a.manifestCache = map[string]easybus.ExtensionManifest{}
+		a.manifestCache = map[string]*easybus.ExtensionManifest{}
 	}
 	a.manifestCache[m.Id] = m
 }

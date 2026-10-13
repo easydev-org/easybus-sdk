@@ -143,8 +143,8 @@ func serveEchoExtReplica(t *testing.T, extBus bus.Bus, replicaID string) *extens
 			return nil
 		},
 		CallHooks: []string{"session.before_create"},
-		OnCallHook: func(ctx context.Context, hook, session string, args map[string]any, tenant string) (easybus.HookResponse, error) {
-			return easybus.HookResponse{Ok: true, Data: map[string]any{"session": session, "hook": hook}}, nil
+		OnCallHook: func(ctx context.Context, hook, session string, args map[string]any, tenant string) (*easybus.HookResponse, error) {
+			return &easybus.HookResponse{Ok: true, Data: easybus.Value(map[string]any{"session": session, "hook": hook})}, nil
 		},
 		EventHooks: []string{"session.created"},
 		OnEventHook: func(ctx context.Context, hook, session string, payload any, tenant string) error {
@@ -460,11 +460,11 @@ func testProgress(t *testing.T, newPair Factory) {
 	}
 	defer sub.Close()
 
-	if err := ext.ReportProgress(ctx, T, "c-progress", easybus.ToolProgress{Phase: protocolPtr("sync"), Progress: protocolF32(0.5), Text: protocolPtr("half")}); err != nil {
+	if err := ext.ReportProgress(ctx, T, "c-progress", &easybus.ToolProgress{Phase: protocolPtr("sync"), Progress: protocolF32(0.5), Text: protocolPtr("half")}); err != nil {
 		t.Fatal(err)
 	}
 
-	done := make(chan easybus.Envelope, 1)
+	done := make(chan *easybus.Envelope, 1)
 	go func() {
 		env, ok := sub.Next(ctx)
 		if ok {
@@ -478,7 +478,7 @@ func testProgress(t *testing.T, newPair Factory) {
 			t.Fatalf("payload = %#v", env.Payload)
 		}
 		if p.CallId != "c-progress" || p.Phase == nil || *p.Phase != "sync" {
-			t.Fatalf("progress = %+v", p)
+			t.Fatalf("progress = %+v", &p)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("progress not delivered")
@@ -819,7 +819,7 @@ func testLifecycle(t *testing.T, newPair Factory) {
 	agentBus, extBus, cleanup := newPair(t)
 	defer cleanup()
 
-	received := make(chan easybus.LifecycleEvent, 8)
+	received := make(chan *easybus.LifecycleEvent, 8)
 	ext := extension.New(extBus, extension.Config{
 		ID:      "lc-ext",
 		Version: "1.0",
@@ -829,7 +829,7 @@ func testLifecycle(t *testing.T, newPair Factory) {
 			}},
 		},
 		Lifecycle: []string{"created", "forked", "renamed", "deleted"},
-		OnLifecycle: func(ctx context.Context, ev easybus.LifecycleEvent, tenant string) error {
+		OnLifecycle: func(ctx context.Context, ev *easybus.LifecycleEvent, tenant string) error {
 			received <- ev
 			return nil
 		},
@@ -850,7 +850,7 @@ func testLifecycle(t *testing.T, newPair Factory) {
 	for i, want := range []string{"created", "forked", "renamed", "deleted"} {
 		select {
 		case ev := <-received:
-			if string(ev.Kind) != want || ev.SessionName != "sess-lc" {
+			if easybus.LifecycleKindString(ev.Kind) != want || ev.SessionName != "sess-lc" {
 				t.Fatalf("event %d = %+v", i, ev)
 			}
 		case <-time.After(10 * time.Second):
@@ -1599,7 +1599,7 @@ func testRequeueDLQ(t *testing.T, newPair Factory) {
 	a := agent.New(agentBus)
 
 	id := protocol.NewID()
-	if err := agentBus.InboxPublish(ctx, protocol.ChMailbox(T, "sess-rq"), easybus.MailboxMessage{Id: id, Type: "requeue-me", Payload: map[string]any{"k": 1}}, bus.InboxPublishOpts{ID: id, SessionName: "sess-rq", Tenant: T}); err != nil {
+	if err := agentBus.InboxPublish(ctx, protocol.ChMailbox(T, "sess-rq"), easybus.MailboxMessage{Id: id, Type: "requeue-me", Payload: easybus.Value(map[string]any{"k": 1})}, bus.InboxPublishOpts{ID: id, SessionName: "sess-rq", Tenant: T}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1671,9 +1671,9 @@ func testHookSchema(t *testing.T, newPair Factory) {
 			Call:  map[string]map[string]any{"audit": {"type": "object", "required": []any{"who"}, "properties": map[string]any{"who": map[string]any{"type": "string"}}}},
 			Event: map[string]map[string]any{"notice": {"type": "object", "required": []any{"kind"}, "properties": map[string]any{"kind": map[string]any{"type": "string"}}}},
 		},
-		OnCallHook: func(ctx context.Context, hook, session string, args map[string]any, tenant string) (easybus.HookResponse, error) {
+		OnCallHook: func(ctx context.Context, hook, session string, args map[string]any, tenant string) (*easybus.HookResponse, error) {
 			badCall <- easybus.HookResponse{Ok: true} // would only reach here with valid args
-			return easybus.HookResponse{Ok: true}, nil
+			return &easybus.HookResponse{Ok: true}, nil
 		},
 		OnEventHook: func(ctx context.Context, hook, session string, payload any, tenant string) error {
 			badEvent <- "delivered"

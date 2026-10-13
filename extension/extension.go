@@ -13,6 +13,7 @@ import (
 	easybus "github.com/easydev-org/easybus-sdk"
 	"github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/protocol"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // maxToolContentBytes caps a tool's `content` text returned to the agent. It
@@ -163,47 +164,13 @@ func validateHookSchema(schema map[string]any, value any, path string) string {
 
 // OnLifecycleFunc receives session lifecycle events. Returning an error is
 // logged by the SDK and otherwise ignored (lifecycle is best-effort).
-type OnLifecycleFunc func(ctx context.Context, ev easybus.LifecycleEvent, tenant string) error
+type OnLifecycleFunc func(ctx context.Context, ev *easybus.LifecycleEvent, tenant string) error
 
 // OnCallHook is the sync call-hook handler.
-type OnCallHook func(ctx context.Context, hook, sessionName string, args map[string]any, tenant string) (easybus.HookResponse, error)
+type OnCallHook func(ctx context.Context, hook, sessionName string, args map[string]any, tenant string) (*easybus.HookResponse, error)
 
 // OnEventHook is the async event-hook handler.
 type OnEventHook func(ctx context.Context, hook, sessionName string, payload any, tenant string) error
-
-type manifestTool = struct {
-	Description    string                  `json:"description"`
-	Descriptions   *map[string]string      `json:"descriptions,omitempty"`
-	InputSchema    *map[string]interface{} `json:"input_schema,omitempty"`
-	Name           string                  `json:"name"`
-	RequiredConfig *[]string               `json:"required_config,omitempty"`
-}
-
-// manifestVariables mirrors the Prompt.variables type in types.gen.go so we
-// can assign it directly to e.manifest.Prompt.
-type manifestVariable = struct {
-	Description  *string                                        `json:"description,omitempty"`
-	Descriptions *map[string]string                             `json:"descriptions,omitempty"`
-	Name         string                                         `json:"name"`
-	Scope        *easybus.ExtensionManifestPromptVariablesScope `json:"scope,omitempty"`
-}
-
-// manifestConfig mirrors the anonymous ExtensionManifest.Config item type in
-// types.gen.go so we can assign it directly. Field order matches the
-// generator (alphabetical) — Go structural typing is by field set + tags, so
-// order does not matter for assignability, but keeping it identical avoids
-// confusion.
-type manifestConfig = struct {
-	Capability   *easybus.ExtensionManifestConfigCapability `json:"capability,omitempty"`
-	Default      any                                        `json:"default,omitempty"`
-	Description  *string                                    `json:"description,omitempty"`
-	Descriptions *map[string]string                         `json:"descriptions,omitempty"`
-	EnumValues   *[]string                                  `json:"enum_values,omitempty"`
-	Kind         *easybus.ExtensionManifestConfigKind       `json:"kind,omitempty"`
-	Name         string                                     `json:"name"`
-	Scope        *easybus.ExtensionManifestConfigScope      `json:"scope,omitempty"`
-	Type         easybus.ExtensionManifestConfigType        `json:"type"`
-}
 
 // Extension is the extension-side role.
 type Extension struct {
@@ -224,74 +191,56 @@ type Extension struct {
 }
 
 func New(b bus.Bus, cfg Config) *Extension {
-	e := &Extension{b: b, cfg: cfg, manifest: easybus.ExtensionManifest{Id: cfg.ID, Version: cfg.Version, Features: &easybusFeatures}, configStore: newConfigStore(), inflight: map[string]map[string]context.CancelFunc{}, replicaID: resolveReplicaID(cfg.ReplicaID)}
+	e := &Extension{
+		b:           b,
+		cfg:         cfg,
+		manifest:    easybus.ExtensionManifest{Id: cfg.ID, Version: cfg.Version, Features: append([]string(nil), easybusFeatures...)},
+		configStore: newConfigStore(),
+		inflight:    map[string]map[string]context.CancelFunc{},
+		replicaID:   resolveReplicaID(cfg.ReplicaID),
+	}
 
 	if len(cfg.Tools) > 0 {
-		caps := []easybus.ExtensionManifestCapabilities{easybus.Tools}
-		e.manifest.Capabilities = &caps
-		tools := []manifestTool{}
+		e.manifest.Capabilities = []string{easybus.Tools}
 		for name, spec := range cfg.Tools {
-			var is *map[string]interface{}
-			if spec.InputSchema != nil {
-				is = &spec.InputSchema
+			t := &easybus.ExtensionTool{
+				Name:           name,
+				Description:    spec.Description,
+				Descriptions:   spec.Descriptions,
+				InputSchema:    easybus.Struct(spec.InputSchema),
+				RequiredConfig: spec.RequiredConfig,
 			}
-			var ds *map[string]string
-			if spec.Descriptions != nil {
-				ds = &spec.Descriptions
-			}
-			var cfgRefs *[]string
-			if spec.RequiredConfig != nil {
-				cfgRefs = &spec.RequiredConfig
-			}
-			tools = append(tools, manifestTool{Name: name, Description: spec.Description, Descriptions: ds, InputSchema: is, RequiredConfig: cfgRefs})
+			e.manifest.Tools = append(e.manifest.Tools, t)
 		}
-		e.manifest.Tools = &tools
 	}
 	if len(cfg.Variables) > 0 {
 		if e.manifest.Capabilities == nil {
-			caps := []easybus.ExtensionManifestCapabilities{easybus.Prompt}
-			e.manifest.Capabilities = &caps
+			e.manifest.Capabilities = []string{easybus.Prompt}
 		} else {
-			e.manifest.Capabilities = ptrAppendCap(*e.manifest.Capabilities, easybus.Prompt)
+			e.manifest.Capabilities = append(e.manifest.Capabilities, easybus.Prompt)
 		}
-		vars := []manifestVariable{}
 		for name, spec := range cfg.Variables {
-			v := manifestVariable{Name: name}
-			if spec.Description != "" {
-				d := spec.Description
+			d := spec.Description
+			v := &easybus.ExtensionVariable{Name: name, Scope: easybus.ScopeFromString(spec.Scope)}
+			if d != "" {
 				v.Description = &d
 			}
 			if spec.Descriptions != nil {
-				v.Descriptions = &spec.Descriptions
+				v.Descriptions = spec.Descriptions
 			}
-			scope := spec.Scope
-			if scope == "" {
-				scope = "global"
-			}
-			s := easybus.ExtensionManifestPromptVariablesScope(scope)
-			v.Scope = &s
-			vars = append(vars, v)
+			e.manifest.PromptVariables = append(e.manifest.PromptVariables, v)
 		}
-		e.manifest.Prompt = &struct {
-			Variables *[]manifestVariable `json:"variables,omitempty"`
-		}{Variables: &vars}
 	}
 	if len(cfg.Config) > 0 {
-		items := []manifestConfig{}
 		for name, spec := range cfg.Config {
-			item := manifestConfig{
+			item := &easybus.ExtensionConfigItem{
 				Name: name,
-				Type: easybus.ExtensionManifestConfigType(spec.Type),
+				Type: easybus.ConfigTypeFromString(spec.Type),
 			}
-			// kind defaults to "value" (mirrors the TS schema default).
-			kind := spec.Kind
-			if kind == "" {
-				kind = "value"
-			}
-			k := easybus.ExtensionManifestConfigKind(kind)
+			k := easybus.ConfigKindFromString(spec.Kind)
 			item.Kind = &k
 			if spec.Capability != "" {
-				cap := easybus.ExtensionManifestConfigCapability(spec.Capability)
+				cap := spec.Capability
 				item.Capability = &cap
 			}
 			if spec.Description != "" {
@@ -299,64 +248,39 @@ func New(b bus.Bus, cfg Config) *Extension {
 				item.Description = &d
 			}
 			if spec.Descriptions != nil {
-				ds := spec.Descriptions
-				item.Descriptions = &ds
+				item.Descriptions = spec.Descriptions
 			}
-			if spec.EnumValues != nil {
-				item.EnumValues = &spec.EnumValues
-			}
+			item.EnumValues = spec.EnumValues
 			if spec.Default != nil {
-				item.Default = spec.Default
+				item.Default = easybus.Value(spec.Default)
 			}
-			scope := spec.Scope
-			if scope == "" {
-				scope = "global"
-			}
-			s := easybus.ExtensionManifestConfigScope(scope)
-			item.Scope = &s
-			items = append(items, item)
+			item.Scope = easybus.ScopeFromString(spec.Scope)
+			e.manifest.Config = append(e.manifest.Config, item)
 		}
-		e.manifest.Config = &items
 	}
 	if len(cfg.Lifecycle) > 0 {
-		kinds := make([]easybus.ExtensionManifestLifecycle, 0, len(cfg.Lifecycle))
-		for _, k := range cfg.Lifecycle {
-			kinds = append(kinds, easybus.ExtensionManifestLifecycle(k))
-		}
-		e.manifest.Lifecycle = &kinds
+		e.manifest.Lifecycle = append([]string(nil), cfg.Lifecycle...)
 	}
 	if len(cfg.CallHooks) > 0 || len(cfg.EventHooks) > 0 || len(cfg.HookSchemas.Call) > 0 || len(cfg.HookSchemas.Event) > 0 {
-		var call, event *[]string
-		var callSchemas, eventSchemas *map[string]map[string]any
-		if len(cfg.CallHooks) > 0 {
-			call = &cfg.CallHooks
+		h := &easybus.HookSpec{
+			Call:         cfg.CallHooks,
+			Event:        cfg.EventHooks,
+			CallSchemas:  map[string]*structpb.Struct{},
+			EventSchemas: map[string]*structpb.Struct{},
 		}
-		if len(cfg.EventHooks) > 0 {
-			event = &cfg.EventHooks
+		for k, v := range cfg.HookSchemas.Call {
+			h.CallSchemas[k] = easybus.Struct(v)
 		}
-		if len(cfg.HookSchemas.Call) > 0 {
-			callSchemas = &cfg.HookSchemas.Call
+		for k, v := range cfg.HookSchemas.Event {
+			h.EventSchemas[k] = easybus.Struct(v)
 		}
-		if len(cfg.HookSchemas.Event) > 0 {
-			eventSchemas = &cfg.HookSchemas.Event
-		}
-		e.manifest.Hooks = &struct {
-			Call         *[]string                          `json:"call,omitempty"`
-			CallSchemas  *map[string]map[string]interface{} `json:"call_schemas,omitempty"`
-			Event        *[]string                          `json:"event,omitempty"`
-			EventSchemas *map[string]map[string]interface{} `json:"event_schemas,omitempty"`
-		}{Call: call, Event: event, CallSchemas: callSchemas, EventSchemas: eventSchemas}
+		e.manifest.Hooks = h
 	}
 	return e
 }
 
-func ptrAppendCap(s []easybus.ExtensionManifestCapabilities, c easybus.ExtensionManifestCapabilities) *[]easybus.ExtensionManifestCapabilities {
-	n := append(s, c)
-	return &n
-}
-
 // Manifest returns the discovery manifest.
-func (e *Extension) Manifest() easybus.ExtensionManifest { return e.manifest }
+func (e *Extension) Manifest() *easybus.ExtensionManifest { return &e.manifest }
 
 // Serve registers discovery/tool/variable/hook channels and blocks until ctx done.
 func (e *Extension) Serve(ctx context.Context) error {
@@ -478,7 +402,7 @@ func PresenceExtID(key string) string {
 
 func (e *Extension) startPresence(ctx context.Context) {
 	put := func() {
-		raw, err := json.Marshal(e.manifest)
+		raw, err := json.Marshal(&e.manifest)
 		if err == nil {
 			_ = e.b.KVPut(ctx, PresenceBucket, e.presenceKey(), string(raw), PresenceTTL)
 		}
@@ -499,7 +423,7 @@ func (e *Extension) startPresence(ctx context.Context) {
 }
 
 // ReportProgress reports in-flight progress for a tool call.
-func (e *Extension) ReportProgress(ctx context.Context, tenant, callID string, progress easybus.ToolProgress) error {
+func (e *Extension) ReportProgress(ctx context.Context, tenant, callID string, progress *easybus.ToolProgress) error {
 	progress.CallId = callID
 	return e.b.Publish(ctx, protocol.ChToolProgress(tenant, callID), progress, bus.PublishOpts{Tenant: tenant})
 }
@@ -521,7 +445,7 @@ func (e *Extension) serveDiscovery(ctx context.Context) error {
 				return
 			}
 			if env.ReplyTo != nil {
-				_ = e.b.Publish(ctx, *env.ReplyTo, e.manifest, bus.PublishOpts{Tenant: protocol.GlobalTenant})
+				_ = e.b.Publish(ctx, *env.ReplyTo, &e.manifest, bus.PublishOpts{Tenant: protocol.GlobalTenant})
 			}
 		}
 	}()
@@ -557,7 +481,7 @@ func (e *Extension) pumpTool(ctx context.Context, name string, spec ToolSpec, su
 }
 
 // handleToolCall executes one tool call and publishes the result envelope.
-func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSpec, env easybus.Envelope) {
+func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSpec, env *easybus.Envelope) {
 	replyTo := ""
 	if env.ReplyTo != nil {
 		replyTo = *env.ReplyTo
@@ -579,8 +503,8 @@ func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSp
 	if sessionName != "" {
 		e.trackInflight(tenant, sessionName, call.CallId, cancel)
 	}
-	res := easybus.ToolResult{CallId: call.CallId, Tool: name}
-	data, err := spec.Execute(callCtx, call.Arguments, call.CallId, sessionName, tenant)
+	res := &easybus.ToolResult{CallId: call.CallId, Tool: name}
+	data, err := spec.Execute(callCtx, easybus.StructMap(call.Arguments), call.CallId, sessionName, tenant)
 	e.untrackInflight(tenant, sessionName, call.CallId)
 	if err != nil {
 		code := easybus.ToolResultErrorCodeInternal
@@ -589,10 +513,7 @@ func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSp
 			code = te.Code
 		}
 		msg := err.Error()
-		res.Error = &struct {
-			Code    easybus.ToolResultErrorCode `json:"code"`
-			Message string                      `json:"message"`
-		}{Code: code, Message: msg}
+		res.Error = &easybus.ToolError{Code: code, Message: msg}
 	} else {
 		// Text feeds the model's context; a huge blob would blow it. Return
 		// large data as a FILE (data.files + object store), not as content.
@@ -601,21 +522,15 @@ func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSp
 				"tool '%s' returned %d bytes of text, over the %d-byte limit; return large data as a file (data.files) instead",
 				name, len([]byte(data.Content)), maxToolContentBytes,
 			)
-			res.Error = &struct {
-				Code    easybus.ToolResultErrorCode `json:"code"`
-				Message string                      `json:"message"`
-			}{Code: easybus.ToolResultErrorCodeInvalidArgument, Message: msg}
+			res.Error = &easybus.ToolError{Code: easybus.ToolResultErrorCodeInvalidArgument, Message: msg}
 		} else if data.Content != "" {
 			res.Content = &data.Content
 		}
 		if res.Error == nil && data.Data != nil {
-			res.Data = data.Data
+			res.Data = easybus.Value(data.Data)
 		}
 		if res.Error == nil && data.Object != nil {
-			res.Object = &struct {
-				ContentType *string `json:"content_type,omitempty"`
-				Id          string  `json:"id"`
-			}{ContentType: data.Object.ContentType, Id: data.Object.Id}
+			res.Object = &easybus.ObjectRef{ContentType: data.Object.ContentType, Id: data.Object.Id}
 		}
 	}
 	_ = e.b.Publish(context.Background(), replyTo, res, bus.PublishOpts{Tenant: tenant})
@@ -680,28 +595,16 @@ func (e *Extension) serveCallHooks(ctx context.Context) error {
 				if tenant == "" {
 					tenant = protocol.SubjectTenant(env.Ch)
 				}
-				var res easybus.HookResponse
-				var args map[string]any
-				if call.Arguments != nil {
-					args = *call.Arguments
-				}
+				var res *easybus.HookResponse
+				args := easybus.StructMap(call.Arguments)
 				if msg := validateHookSchema(e.cfg.HookSchemas.Call[hook], args, "arguments"); msg != "" {
-					res = easybus.HookResponse{Ok: false, Error: &struct {
-						Code    easybus.HookResponseErrorCode `json:"code"`
-						Message string                        `json:"message"`
-					}{Code: easybus.HookResponseErrorCodeInvalidArgument, Message: msg}}
+					res = &easybus.HookResponse{Ok: false, Error: &easybus.ToolError{Code: easybus.HookResponseErrorCodeInvalidArgument, Message: msg}}
 				} else if e.cfg.OnCallHook == nil {
-					res = easybus.HookResponse{Ok: false, Error: &struct {
-						Code    easybus.HookResponseErrorCode `json:"code"`
-						Message string                        `json:"message"`
-					}{Code: easybus.HookResponseErrorCodeNotFound, Message: "no handler for hook " + hook}}
+					res = &easybus.HookResponse{Ok: false, Error: &easybus.ToolError{Code: easybus.HookResponseErrorCodeNotFound, Message: "no handler for hook " + hook}}
 				} else {
 					r, err := e.cfg.OnCallHook(ctx, hook, sessionName, args, tenant)
 					if err != nil {
-						res = easybus.HookResponse{Ok: false, Error: &struct {
-							Code    easybus.HookResponseErrorCode `json:"code"`
-							Message string                        `json:"message"`
-						}{Code: easybus.HookResponseErrorCodeInternal, Message: err.Error()}}
+						res = &easybus.HookResponse{Ok: false, Error: &easybus.ToolError{Code: easybus.HookResponseErrorCodeInternal, Message: err.Error()}}
 					} else {
 						res = r
 					}
@@ -771,15 +674,15 @@ func (e *Extension) serveLifecycle(ctx context.Context) error {
 			if !ok {
 				return
 			}
-			var ev easybus.LifecycleEvent
-			if !protocol.Coerce(env.Payload, &ev) {
+			ev := &easybus.LifecycleEvent{}
+			if !protocol.Coerce(env.Payload, ev) {
 				continue
 			}
 			tenant := env.Tenant
 			if tenant == "" {
 				tenant = protocol.SubjectTenant(env.Ch)
 			}
-			kind := string(ev.Kind)
+			kind := easybus.LifecycleKindString(ev.Kind)
 			if !wanted[kind] {
 				continue
 			}

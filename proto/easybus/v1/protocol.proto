@@ -154,6 +154,9 @@ message ExtensionConfigItem {
   map<string, string> descriptions = 6;
   repeated string enum_values = 7;
   google.protobuf.Value default = 8;
+  // Capability is REQUIRED when kind == MODEL (the modality a model picker is
+  // scoped to). Open string: text/image/embedding/... .
+  optional string capability = 9;
 }
 
 // ConfigSet is a request to set a config value (ack/reject).
@@ -167,10 +170,12 @@ message ConfigSet {
   optional bool ack = 7;
 }
 
-// ConfigSnapshot is the full applied config (global + per-session).
+// ConfigSnapshot is the full applied config: `global` is name->value; the
+// per-session overrides are a nested map (session -> name -> value), which
+// protobuf maps cannot express, so they ride as a single opaque Value.
 message ConfigSnapshot {
   map<string, google.protobuf.Value> global = 1;
-  map<string, google.protobuf.Value> sessions = 2;
+  google.protobuf.Value sessions = 2;
 }
 
 // ── hooks ───────────────────────────────────────────────────────────────────

@@ -104,8 +104,8 @@ Extensions connect to NATS as clients; the agent may embed the broker via
 
 ## Versioning
 
-Tags are `v2.x.y` (Go semantic import versioning). The wire contract is defined
-once by the OpenAPI schema (`types.gen.go` is generated from it); a
-protocol-affecting change updates that schema and regenerates. Internal packages
-are published to / consumed from the platform's private **artifact** registry;
-see `DEVELOP.md`.
+Tags are semantic import versioning. The wire contract is defined once by
+`proto/easybus/v1/protocol.proto` (`gen/easybus/v1/*.pb.go` is generated from
+it, in every language); a protocol-affecting change updates the `.proto` and
+regenerates. Internal packages are published to / consumed from the platform's
+private **artifact** registry; see `DEVELOP.md`.

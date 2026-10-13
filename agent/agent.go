@@ -46,7 +46,7 @@ type Agent struct {
 	// replicas, presence contributes N KV keys under `<extId>.`; the first live
 	// replica populates the entry, siblings refresh it, and it is dropped only
 	// when the LAST replica's key expires.
-	manifestCache map[string]easybus.ExtensionManifest
+	manifestCache map[string]*easybus.ExtensionManifest
 	// livePresenceKeys holds the unexpired presence KV keys per extId, so an
 	// extId stays "online" while any replica key remains and goes offline once
 	// all have expired (or been deleted).
@@ -56,7 +56,7 @@ type Agent struct {
 }
 
 func New(b bus.Bus) *Agent {
-	return &Agent{b: b, manifestCache: map[string]easybus.ExtensionManifest{}, livePresenceKeys: map[string]map[string]bool{}}
+	return &Agent{b: b, manifestCache: map[string]*easybus.ExtensionManifest{}, livePresenceKeys: map[string]map[string]bool{}}
 }
 
 func (a *Agent) Bus() bus.Bus { return a.b }
@@ -66,10 +66,10 @@ func (a *Agent) Bus() bus.Bus { return a.b }
 // feature (absent = pre-0.3 baseline). Call Discover first.
 func (a *Agent) ExtSupports(extID, feature string) bool {
 	m := a.manifest(extID)
-	if m == nil || m.Features == nil {
+	if m == nil {
 		return false
 	}
-	for _, f := range *m.Features {
+	for _, f := range m.Features {
 		if f == feature {
 			return true
 		}
@@ -83,7 +83,7 @@ func (a *Agent) ExtSupports(extID, feature string) bool {
 // shared by the extId while ANY replica is alive.
 func (a *Agent) Manifest(extID string) *easybus.ExtensionManifest { return a.manifest(extID) }
 
-func (a *Agent) Discover(ctx context.Context, maxWaitMs int) ([]easybus.ExtensionManifest, error) {
+func (a *Agent) Discover(ctx context.Context, maxWaitMs int) ([]*easybus.ExtensionManifest, error) {
 	// Presence-first: extensions heartbeat their manifests into the
 	// easybus-presence KV bucket; the watcher keeps the cache live (offline
 	// extensions drop out via key TTL). Only a cold cache falls back to the
@@ -95,7 +95,7 @@ func (a *Agent) Discover(ctx context.Context, maxWaitMs int) ([]easybus.Extensio
 	if n > 0 {
 		// One manifest per extId (the cache is keyed by id, so this is already
 		// de-duplicated across replicas).
-		out := make([]easybus.ExtensionManifest, 0, n)
+		out := make([]*easybus.ExtensionManifest, 0, n)
 		a.presenceMu.Lock()
 		for _, m := range a.manifestCache {
 			out = append(out, m)
@@ -108,10 +108,10 @@ func (a *Agent) Discover(ctx context.Context, maxWaitMs int) ([]easybus.Extensio
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := []easybus.ExtensionManifest{}
+	out := []*easybus.ExtensionManifest{}
 	for _, r := range replies {
-		var m easybus.ExtensionManifest
-		if !protocol.Coerce(r.Payload, &m) {
+		m := &easybus.ExtensionManifest{}
+		if !protocol.Coerce(r.Payload, m) {
 			continue
 		}
 		if seen[m.Id] {
@@ -171,7 +171,7 @@ func (a *Agent) applyPresenceEvent(ev bus.KvEvent) {
 		return
 	}
 	a.trackPresenceKey(extID, ev.Key)
-	a.manifestCache[m.Id] = m
+	a.manifestCache[m.Id] = &m
 }
 
 // trackPresenceKey records that key is live for extID (idempotent).
@@ -202,7 +202,7 @@ func (a *Agent) forgetPresenceKey(extID, key string) {
 // CallTool invokes a tool and returns its single terminal result. The tenant
 // and sessionName ride the envelope's first-class fields.
 func (a *Agent) CallTool(ctx context.Context, tenant, sessionName, extID, tool, callID string, args map[string]any) (ToolResult, error) {
-	reply, err := a.b.Request(ctx, protocol.ChToolCall(tenant, extID, tool), easybus.ToolCallEnvelope{CallId: callID, Arguments: args}, bus.RequestOpts{SessionName: sessionName, Tenant: tenant})
+	reply, err := a.b.Request(ctx, protocol.ChToolCall(tenant, extID, tool), easybus.ToolCallEnvelope{CallId: callID, Arguments: easybus.Struct(args)}, bus.RequestOpts{SessionName: sessionName, Tenant: tenant})
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -252,28 +252,28 @@ func (a *Agent) ResolveVariable(ctx context.Context, tenant, sessionName, provid
 }
 
 // CallHook fires a sync call-hook.
-func (a *Agent) CallHook(ctx context.Context, tenant, extID, hook, sessionName string, args map[string]any) (easybus.HookResponse, error) {
-	reply, err := a.b.Request(ctx, protocol.ChHookCall(tenant, extID, hook), easybus.HookCall{Hook: hook, SessionName: sessionName, Arguments: &args}, bus.RequestOpts{Tenant: tenant})
+func (a *Agent) CallHook(ctx context.Context, tenant, extID, hook, sessionName string, args map[string]any) (*easybus.HookResponse, error) {
+	reply, err := a.b.Request(ctx, protocol.ChHookCall(tenant, extID, hook), easybus.HookCall{Hook: hook, SessionName: sessionName, Arguments: easybus.Struct(args)}, bus.RequestOpts{Tenant: tenant})
 	if err != nil {
-		return easybus.HookResponse{}, err
+		return nil, err
 	}
 	var hr easybus.HookResponse
 	if !protocol.Coerce(reply.Payload, &hr) {
-		return easybus.HookResponse{}, fmt.Errorf("hook %q: invalid response", hook)
+		return nil, fmt.Errorf("hook %q: invalid response", hook)
 	}
-	return hr, nil
+	return &hr, nil
 }
 
 // Interrupt asks an extension to interrupt in-flight work.
 // Interrupt signals the extension to abort ALL in-flight work (broadcast:
 // no session scoping). For one session use InterruptSession.
 func (a *Agent) Interrupt(ctx context.Context, tenant, extID string) error {
-	return a.b.Publish(ctx, protocol.ChInterrupt(tenant, extID), easybus.InterruptSignal{}, bus.PublishOpts{Tenant: tenant})
+	return a.b.Publish(ctx, protocol.ChInterrupt(tenant, extID), &easybus.InterruptSignal{}, bus.PublishOpts{Tenant: tenant})
 }
 
 // InterruptSession aborts only the in-flight tool calls of one session.
 func (a *Agent) InterruptSession(ctx context.Context, tenant, extID, sessionName string, reason ...string) error {
-	sig := easybus.InterruptSignal{SessionName: &sessionName}
+	sig := &easybus.InterruptSignal{SessionName: &sessionName}
 	if len(reason) > 0 {
 		sig.Reason = &reason[0]
 	}
@@ -286,10 +286,10 @@ func (a *Agent) InterruptSession(ctx context.Context, tenant, extID, sessionName
 // Extensions that declared the kind receive it; session-scoped config
 // overrides are cleaned up on "deleted".
 func (a *Agent) PublishLifecycleEvent(ctx context.Context, tenant, kind, sessionName string, payload any) error {
-	ev := easybus.LifecycleEvent{
-		Kind:        easybus.LifecycleEventKind(kind),
+	ev := &easybus.LifecycleEvent{
+		Kind:        easybus.LifecycleKindFromString(kind),
 		SessionName: sessionName,
-		Payload:     payload,
+		Payload:     easybus.Value(payload),
 	}
 	if kind == "renamed" {
 		if from, ok := payload.(map[string]any); ok {
@@ -318,7 +318,7 @@ func (a *Agent) PublishLifecycleEvent(ctx context.Context, tenant, kind, session
 
 // PublishEventHook fires an async event-hook.
 func (a *Agent) PublishEventHook(ctx context.Context, tenant, hook, sessionName string, payload any) error {
-	return a.b.Publish(ctx, protocol.ChHookEvent(tenant, hook), easybus.HookEvent{Hook: hook, SessionName: sessionName, Payload: payload}, bus.PublishOpts{Tenant: tenant})
+	return a.b.Publish(ctx, protocol.ChHookEvent(tenant, hook), easybus.HookEvent{Hook: hook, SessionName: sessionName, Payload: easybus.Value(payload)}, bus.PublishOpts{Tenant: tenant})
 }
 
 // SubscribeProgress subscribes to in-flight progress telemetry for a tool
@@ -341,7 +341,7 @@ func (a *Agent) PublishMailbox(ctx context.Context, tenant, sessionName, typ str
 		s := source[0]
 		src = &s
 	}
-	return a.b.InboxPublish(ctx, protocol.ChMailbox(tenant, sessionName), easybus.MailboxMessage{Id: id, Type: typ, Payload: payload, Source: src}, bus.InboxPublishOpts{ID: id, SessionName: sessionName, Tenant: tenant})
+	return a.b.InboxPublish(ctx, protocol.ChMailbox(tenant, sessionName), easybus.MailboxMessage{Id: id, Type: typ, Payload: easybus.Value(payload), Source: src}, bus.InboxPublishOpts{ID: id, SessionName: sessionName, Tenant: tenant})
 }
 
 // DefaultMaxNaksBeforeTerm is the poison-message escalation threshold:

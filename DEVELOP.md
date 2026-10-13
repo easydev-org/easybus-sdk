@@ -63,9 +63,15 @@ extension replica support — do not treat it as a regression, but also do not
 
 ## Conventions
 
-* **Zero/optional fields** — pointers for optional wire fields; `omitempty`
-  tags. Generated types live in `types.gen.go` and are regenerated from the TS
-  zod schemas via `generate.sh` — never hand-edit them.
+* **Zero/optional fields** — proto3 `optional` fields become pointers in Go;
+  the wire is JSON (protojson), so snake_case names are preserved.
+* **One source of truth** — the wire contract is `proto/easybus/v1/*.proto`.
+  Generated Go lives in `gen/easybus/v1` and is regenerated via `generate.sh`
+  (`buf lint && buf generate`) — never hand-edit it. Add a language by adding a
+  plugin to `proto/buf.gen.yaml`; the `.proto` is never edited per language.
+* **Messages are passed by pointer** — generated messages embed a
+  `protoimpl.MessageState` (with a mutex), so they must not be copied by value;
+  the bus interface and all handlers use `*Envelope` / `*ToolResult` / ….
 * **Tenant namespacing** — every data-plane subject is `easybus.<tenant>.<…>`;
   discovery is the global exception (`easybus.discover`, `protocol.GlobalTenant`).
 * **KV keys** — build them with the `protocol.*Key` helpers; escape untrusted

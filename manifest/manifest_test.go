@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	easybus "github.com/easydev-org/easybus-sdk"
 	"github.com/easydev-org/easybus-sdk/extension"
 	"github.com/easydev-org/easybus-sdk/manifest"
 )
@@ -128,10 +129,10 @@ config:
 		t.Fatal("manifest config nil")
 	}
 	found := false
-	for _, item := range *man.Config {
+	for _, item := range man.Config {
 		if item.Name == "model.image" {
 			found = true
-			if item.Kind == nil || string(*item.Kind) != "model" {
+			if item.Kind == nil || easybus.ConfigKindString(*item.Kind) != "model" {
 				t.Fatalf("manifest kind = %v", item.Kind)
 			}
 			if item.Capability == nil || string(*item.Capability) != "image" {

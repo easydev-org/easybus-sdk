@@ -49,7 +49,7 @@ type PublishOpts struct {
 // Subscription is a live channel subscription.
 type Subscription interface {
 	// Next blocks until the next envelope or (ctx done / closed).
-	Next(ctx context.Context) (easybus.Envelope, bool)
+	Next(ctx context.Context) (*easybus.Envelope, bool)
 	Close() error
 }
 
@@ -70,7 +70,7 @@ type KvEvent struct {
 
 // InboxMsg is a durable-inbox message with explicit ack/nak/term.
 type InboxMsg struct {
-	Envelope easybus.Envelope
+	Envelope *easybus.Envelope
 	ack      func()
 	nak      func(delayMs int)
 	term     func()
@@ -132,8 +132,8 @@ type ObjectStore interface {
 // Bus is the transport-agnostic message bus. There is exactly one
 // transport (NATS); every listed capability is always available (JetStream).
 type Bus interface {
-	Request(ctx context.Context, ch string, payload any, opts RequestOpts) (easybus.Envelope, error)
-	RequestMany(ctx context.Context, ch string, payload any, opts RequestOpts) ([]easybus.Envelope, error)
+	Request(ctx context.Context, ch string, payload any, opts RequestOpts) (*easybus.Envelope, error)
+	RequestMany(ctx context.Context, ch string, payload any, opts RequestOpts) ([]*easybus.Envelope, error)
 	Publish(ctx context.Context, ch string, payload any, opts PublishOpts) error
 	Subscribe(ctx context.Context, ch string, opts SubscribeOpts) (Subscription, error)
 
@@ -144,7 +144,7 @@ type Bus interface {
 	// oldest first. Retention is a transport property (NATS: stream
 	// max_age; inproc/ws: in-memory log) — the protocol promise is only
 	// that a bounded recent window is replayable for events channels.
-	Replay(ctx context.Context, ch string) ([]easybus.Envelope, error)
+	Replay(ctx context.Context, ch string) ([]*easybus.Envelope, error)
 
 	ObjectPut(ctx context.Context, name string, data []byte) error
 	ObjectGet(ctx context.Context, name string) ([]byte, error)

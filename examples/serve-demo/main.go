@@ -47,8 +47,8 @@ func main() {
 				},
 			},
 		},
-		OnLifecycle: func(ctx context.Context, ev easybus.LifecycleEvent, tenant string) error {
-			log.Info("lifecycle", "kind", string(ev.Kind), "session", ev.SessionName)
+		OnLifecycle: func(ctx context.Context, ev *easybus.LifecycleEvent, tenant string) error {
+			log.Info("lifecycle", "kind", easybus.LifecycleKindString(ev.Kind), "session", ev.SessionName)
 			return nil
 		},
 	})

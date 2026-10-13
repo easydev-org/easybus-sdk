@@ -76,7 +76,7 @@ func (s *ConfigStore) Get(specs map[string]ConfigSpec, tenant, name, sessionName
 	return nil
 }
 
-func (e *Extension) applyConfigSet(set easybus.ConfigSet) {
+func (e *Extension) applyConfigSet(set *easybus.ConfigSet) {
 	tenant := ""
 	if set.Tenant != nil {
 		tenant = *set.Tenant
@@ -90,16 +90,16 @@ func (e *Extension) applyConfigSet(set easybus.ConfigSet) {
 		if e.configStore.session[tenant][*set.SessionName] == nil {
 			e.configStore.session[tenant][*set.SessionName] = map[string]any{}
 		}
-		e.configStore.session[tenant][*set.SessionName][set.Name] = set.Value
+		e.configStore.session[tenant][*set.SessionName][set.Name] = set.Value.AsInterface()
 		return
 	}
 	if e.configStore.global[tenant] == nil {
 		e.configStore.global[tenant] = map[string]any{}
 	}
-	e.configStore.global[tenant][set.Name] = set.Value
+	e.configStore.global[tenant][set.Name] = set.Value.AsInterface()
 }
 
-func (e *Extension) rollbackConfigSet(set easybus.ConfigSet) {
+func (e *Extension) rollbackConfigSet(set *easybus.ConfigSet) {
 	tenant := ""
 	if set.Tenant != nil {
 		tenant = *set.Tenant
@@ -155,27 +155,24 @@ func (e *Extension) serveConfig(ctx context.Context) error {
 				t := tenant
 				set.Tenant = &t
 			}
-			e.applyConfigSet(set)
+			e.applyConfigSet(&set)
 			var rejectErr error
 			if e.cfg.OnConfigChange != nil {
-				rejectErr = e.cfg.OnConfigChange(ctx, set.Name, set.Value, deref(set.SessionName), func(name, sessionName string) any {
+				rejectErr = e.cfg.OnConfigChange(ctx, set.Name, set.Value.AsInterface(), deref(set.SessionName), func(name, sessionName string) any {
 					return e.configStore.Get(e.cfg.Config, tenant, name, sessionName)
 				})
 			}
 			if rejectErr != nil {
-				e.rollbackConfigSet(set)
+				e.rollbackConfigSet(&set)
 			}
 			if set.Ack != nil && *set.Ack {
 				var res easybus.HookResponse
 				if rejectErr != nil {
-					res = easybus.HookResponse{Ok: false, Error: &struct {
-						Code    easybus.HookResponseErrorCode `json:"code"`
-						Message string                        `json:"message"`
-					}{Code: easybus.HookResponseErrorCodeInternal, Message: rejectErr.Error()}}
+					res = easybus.HookResponse{Ok: false, Error: &easybus.ToolError{Code: easybus.HookResponseErrorCodeInternal, Message: rejectErr.Error()}}
 				} else {
 					res = easybus.HookResponse{Ok: true}
 				}
-				_ = e.b.Publish(ctx, replyTo, res, bus.PublishOpts{Tenant: tenant})
+				_ = e.b.Publish(ctx, replyTo, &res, bus.PublishOpts{Tenant: tenant})
 			}
 		}
 	}()
@@ -224,7 +221,7 @@ func (e *Extension) PublishMailboxEvent(ctx context.Context, tenant, sessionName
 	return e.b.InboxPublish(ctx, protocol.ChMailbox(tenant, sessionName), easybus.MailboxMessage{
 		Id:      id,
 		Type:    eventType,
-		Payload: payload,
+		Payload: easybus.Value(payload),
 		Source:  src,
 	}, bus.InboxPublishOpts{ID: id, SessionName: sessionName, Tenant: tenant})
 }
@@ -363,8 +360,8 @@ func (e *Extension) applyConfigKV(ev bus.KvEvent) {
 // Close() tears everything down.
 type kvWatchStopper struct{ stop func() }
 
-func (k kvWatchStopper) Next(ctx context.Context) (easybus.Envelope, bool) {
-	return easybus.Envelope{}, false
+func (k kvWatchStopper) Next(ctx context.Context) (*easybus.Envelope, bool) {
+	return nil, false
 }
 func (k kvWatchStopper) Close() error {
 	if k.stop != nil {
