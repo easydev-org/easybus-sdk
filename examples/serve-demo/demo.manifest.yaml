@@ -1,0 +1,11 @@
+# demo manifest mirroring the wdbidi shape (tools + lifecycle kinds)
+id: demo-ext
+version: 1.0
+lifecycle: [created, deleted]
+tools:
+  - name: ping
+    description: reply pong
+    input_schema:
+      type: object
+      properties:
+        msg: { type: string }
