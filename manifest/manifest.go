@@ -80,7 +80,30 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if m.ID == "" {
 		return nil, fmt.Errorf("manifest: id is required")
 	}
+	if err := m.validateConfig(); err != nil {
+		return nil, err
+	}
 	return &m, nil
+}
+
+// validateConfig enforces the config-knob rules that must hold before an
+// extension registers.
+func (m *Manifest) validateConfig() error {
+	for _, c := range m.Config {
+		if c.Kind != extension.ConfigKindSecret {
+			continue
+		}
+		// A secret knob is a credential: its value is never returned to a
+		// client, and a `default` would ride the (broadcast) manifest — so a
+		// secret MUST be a string and MUST NOT declare a default.
+		if c.Type != "" && c.Type != "string" {
+			return fmt.Errorf("manifest: config %q: kind=secret requires type=string (got %q)", c.Name, c.Type)
+		}
+		if c.Default != nil && c.Default != "" {
+			return fmt.Errorf("manifest: config %q: kind=secret must not declare a default", c.Name)
+		}
+	}
+	return nil
 }
 
 // Bindings carries the name-keyed handlers/resolvers used to build a Config.

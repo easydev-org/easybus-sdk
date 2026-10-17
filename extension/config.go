@@ -11,6 +11,13 @@ import (
 	"github.com/easydev-org/easybus-sdk/protocol"
 )
 
+// Config knob kinds (Kind is an open string; these are the special values).
+const (
+	ConfigKindValue  = "value"
+	ConfigKindModel  = "model"
+	ConfigKindSecret = "secret"
+)
+
 // ConfigSpec declares one config knob in Extension.Config.
 type ConfigSpec struct {
 	Description string
@@ -19,10 +26,11 @@ type ConfigSpec struct {
 	Descriptions map[string]string
 	Type         string // string | number | boolean | enum | json
 	// Kind distinguishes an ordinary knob ("value", default) from a model
-	// reference ("model"): the latter's value is a `provider_id/model_id`
-	// reference and the UI renders a picker scoped to Capability, not a text
-	// field. Mirrors the TS ConfigSpec.kind.
-	Kind string // "value" | "model"
+	// reference ("model") or a credential ("secret"). A model's value is a
+	// `provider_id/model_id` reference (a picker scoped to Capability); a
+	// secret's value is NEVER returned to a client (the agent withholds it and
+	// reports only whether it is set). Mirrors the TS ConfigSpec.kind.
+	Kind string // "value" | "model" | "secret"
 	// Capability is REQUIRED when Kind == "model": the modality the reference
 	// must match (text | image | video | speech | transcription | embedding |
 	// rerank | realtime).
