@@ -140,6 +140,19 @@ type Bus interface {
 	InboxPublish(ctx context.Context, ch string, payload any, opts InboxPublishOpts) error
 	InboxConsume(ctx context.Context, opts InboxConsumeOpts) (InboxSubscription, error)
 
+	// InboxPurge discards the retained messages on a channel, so a consumer that
+	// starts later does not replay them.
+	//
+	// Two callers need this:
+	//   - a test that must not inherit state from earlier runs on a shared broker
+	//     (InboxConsume deliberately starts at DeliverAll, so without a purge a
+	//     developer's broker accumulates history and the test drowns in it);
+	//   - an operator clearing a poisoned queue after triage.
+	//
+	// It is destructive and has no undo, which is why it is explicit rather than
+	// implied by anything.
+	InboxPurge(ctx context.Context, ch string) error
+
 	// Replay returns the retained (durably queued) envelopes for a channel,
 	// oldest first. Retention is a transport property (NATS: stream
 	// max_age; inproc/ws: in-memory log) — the protocol promise is only

@@ -37,9 +37,20 @@ func serveEchoExt(t *testing.T, extBus bus.Bus) *extension.Extension {
 // serveEchoExtReplica serves the conformance echo extension with an explicit
 // replica id, so multi-replica cases can run N copies of the same extId.
 func serveEchoExtReplica(t *testing.T, extBus bus.Bus, replicaID string) *extension.Extension {
+	return serveEchoExtID(t, extBus, "conf-ext", replicaID)
+}
+
+// serveEchoExtID serves the echo extension under an explicit extId and replica id.
+//
+// The presence test drives a KV DELETE and waits for the agent's watcher to react.
+// With a FIXED extId, an earlier run on the same broker has already created and
+// deleted that exact key, so the watcher starts from a snapshot that already
+// includes the history and the new delete is indistinguishable from it — the test
+// then waits out its entire deadline. A fresh extId per run makes the key new.
+func serveEchoExtID(t *testing.T, extBus bus.Bus, extID, replicaID string) *extension.Extension {
 	t.Helper()
 	ext := extension.New(extBus, extension.Config{
-		ID:        "conf-ext",
+		ID:        extID,
 		Version:   "1.0",
 		ReplicaID: replicaID,
 		Tools: map[string]extension.ToolSpec{
@@ -217,6 +228,9 @@ func Run(t *testing.T, newPair Factory) {
 	t.Run("hook_schema_validation", func(t *testing.T) { testHookSchema(t, newPair) })
 	t.Run("config_dot_session_key", func(t *testing.T) { testConfigDotSession(t, newPair) })
 	t.Run("poison_message_escalates_to_dlq", func(t *testing.T) { testPoisonEscalation(t, newPair) })
+	// Separate claim, separate test: the dead letter being WRITTEN is not the same
+	// as ConsumeDLQ READING it, and only the second one is broken.
+	t.Run("dlq_consumer_delivers", func(t *testing.T) { testDLQConsumerDelivers(t, newPair) })
 	t.Run("requeue_dlq", func(t *testing.T) { testRequeueDLQ(t, newPair) })
 }
 
@@ -1315,8 +1329,15 @@ func testKVWatch(t *testing.T, newPair Factory) {
 	agentBus, _, cleanup := newPair(t)
 	defer cleanup()
 	ctx := context.Background()
-	_ = agentBus.KVPut(ctx, "watch-test", "k.a", "1", 0)
-	ch, stop, err := agentBus.KvWatch(ctx, "watch-test", "k.>")
+
+	// A fresh bucket per run. The presence test had the same problem: with a fixed
+	// name, an earlier run on the same broker has already PUTFIELDed and DELETED
+	// these exact keys, so the watch's initial snapshot already carries
+	// Deleted:true and the assertions below read someone else's history. CI gets a
+	// fresh broker and never sees it; a developer's broker does.
+	bucket := "watch-test-" + protocol.NewID()[:6]
+	_ = agentBus.KVPut(ctx, bucket, "k.a", "1", 0)
+	ch, stop, err := agentBus.KvWatch(ctx, bucket, "k.>")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1339,7 +1360,7 @@ func testKVWatch(t *testing.T, newPair Factory) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no Done boundary event")
 	}
-	_ = agentBus.KVPut(ctx, "watch-test", "k.b", "2", 0)
+	_ = agentBus.KVPut(ctx, bucket, "k.b", "2", 0)
 	select {
 	case ev := <-ch:
 		if ev.Key != "k.b" || ev.Value != "2" || !ev.IsUpdate || ev.Done {
@@ -1348,7 +1369,7 @@ func testKVWatch(t *testing.T, newPair Factory) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no update event")
 	}
-	_ = agentBus.KVDelete(ctx, "watch-test", "k.b")
+	_ = agentBus.KVDelete(ctx, bucket, "k.b")
 	select {
 	case ev := <-ch:
 		if ev.Key != "k.b" || !ev.Deleted {
@@ -1433,11 +1454,17 @@ func testPresenceReplicas(t *testing.T, newPair Factory) {
 	defer cleanup()
 	ctx := context.Background()
 
+	// A fresh extId per run, so the presence keys this test creates and deletes
+	// have never existed on this broker before. See serveEchoExtID.
+	extID := "conf-ext-" + protocol.NewID()[:6]
+	keyA := extID + ".pod-a"
+	keyB := extID + ".pod-b"
+
 	// The factory hands out two buses sharing one topology. Replica A runs on
 	// its own connection (so closing it never disturbs the agent's watch);
 	// replica B and the agent share the other.
-	r1 := serveEchoExtReplica(t, extBus1, "pod-a")
-	r2 := serveEchoExtReplica(t, agentBus, "pod-b")
+	r1 := serveEchoExtID(t, extBus1, extID, "pod-a")
+	r2 := serveEchoExtID(t, agentBus, extID, "pod-b")
 	defer r2.Close()
 
 	a := agent.New(agentBus)
@@ -1445,17 +1472,17 @@ func testPresenceReplicas(t *testing.T, newPair Factory) {
 	// snapshot; both replica keys must land as distinct entries.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-a")
-		v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-b")
+		v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyA)
+		v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyB)
 		if v1 != "" && v2 != "" {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-a"); v1 == "" {
+	if v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyA); v1 == "" {
 		t.Fatal("replica pod-a never appeared in the presence bucket")
 	}
-	if v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-b"); v2 == "" {
+	if v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyB); v2 == "" {
 		t.Fatal("replica pod-b never appeared in the presence bucket")
 	}
 
@@ -1467,33 +1494,33 @@ func testPresenceReplicas(t *testing.T, newPair Factory) {
 	}
 	count := 0
 	for _, m := range ms {
-		if m.Id == "conf-ext" {
+		if m.Id == extID {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Fatalf("Discover returned %d manifests for conf-ext across 2 replicas, want 1", count)
+		t.Fatalf("Discover returned %d manifests for %s across 2 replicas, want 1", count, extID)
 	}
 
 	// Killing one replica deletes only its own key; the extension stays alive.
 	if err := r1.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-a"); v1 != "" {
+	if v1, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyA); v1 != "" {
 		t.Fatalf("closed replica's presence key still present: %q", v1)
 	}
-	if v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, "conf-ext.pod-b"); v2 == "" {
+	if v2, _ := agentBus.KVGet(ctx, extension.PresenceBucket, keyB); v2 == "" {
 		t.Fatal("sibling replica's presence key was evicted by the closing replica")
 	}
 	// Agent still sees the extension (a sibling is alive).
-	if a.Manifest("conf-ext") == nil {
+	if a.Manifest(extID) == nil {
 		t.Fatal("extension dropped from cache while a replica was still alive")
 	}
 
 	// Last replica key gone -> the extId is offline. Delete it directly (rather
 	// than closing r2's bus, which the agent shares) so the agent's watcher
 	// observes the expiry on a live connection.
-	if err := agentBus.KVDelete(ctx, extension.PresenceBucket, "conf-ext.pod-b"); err != nil {
+	if err := agentBus.KVDelete(ctx, extension.PresenceBucket, keyB); err != nil {
 		t.Fatal(err)
 	}
 	// 15s, not 5s: this waits for a KV DELETE to propagate to a watch on a
@@ -1503,7 +1530,7 @@ func testPresenceReplicas(t *testing.T, newPair Factory) {
 	// fails the test.
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if a.Manifest("conf-ext") == nil {
+		if a.Manifest(extID) == nil {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -1550,9 +1577,37 @@ func testConfigDotSession(t *testing.T, newPair Factory) {
 	t.Fatalf("dot-session config not recovered; got %v", ext.GetConfig(T, "dots", sess))
 }
 
-// testPoisonEscalation pins the default-safety behavior: a handler that
-// keeps failing gets the message redelivered at most maxNaks times before
-// ConsumeMailbox terms it into the DLQ — no infinite nak loop.
+// testPoisonEscalation pins the default-safety behavior: a handler that keeps
+// failing gets the message redelivered at most maxNaks times, and the message is
+// then PARKED as a dead letter — no infinite nak loop, and no silent loss.
+//
+// It deliberately stops at "the dead letter exists in the DLQ stream", read back
+// through a plain subscription rather than through ConsumeDLQ. Those are two
+// different claims and only one of them holds today:
+//
+//	(a) the dead letter reaches the DLQ stream      <- this test
+//	(b) ConsumeDLQ hands it to a handler           <- TestDLQConsumerDelivers
+//
+// Conflating them produced a misleading failure ("poison message never landed in
+// the DLQ") for a message that WAS in the stream: the real defect is on the read
+// side, and the message needs to say so.
+// drainStreams clears the mailbox and DLQ streams so a test does not inherit the
+// broker's history.
+//
+// InboxConsume starts at DeliverAll by design. That is right for production (a
+// consumer that starts late must still see queued work) and wrong for a test on a
+// shared broker: the handler spends its budget re-nakking yesterday's dead letters
+// while this run's message waits behind them, and the failure presents as a broken
+// DLQ. CI has a fresh broker per job and never sees it.
+func drainStreams(t *testing.T, ctx context.Context, b bus.Bus) {
+	t.Helper()
+	for _, ch := range []string{protocol.MailboxWildcardAll, "easybus.*.dlq"} {
+		if err := b.InboxPurge(ctx, ch); err != nil {
+			t.Fatalf("purge %s: %v", ch, err)
+		}
+	}
+}
+
 func testPoisonEscalation(t *testing.T, newPair Factory) {
 	agentBus, _, cleanup := newPair(t)
 	defer cleanup()
@@ -1560,27 +1615,43 @@ func testPoisonEscalation(t *testing.T, newPair Factory) {
 	a := agent.New(agentBus)
 	tag := "always-fails-" + protocol.NewID()[:6]
 
-	// Subscribe to the DLQ BEFORE anything is published.
+	// Drain whatever earlier runs left in these streams.
 	//
-	// The inbox bus is core NATS pub/sub: a message published while nobody is
-	// subscribed is gone. The old version published first and only subscribed to
-	// the DLQ after the third failure, so it raced — the message was very often
-	// already in the past by then, and the 1s sleep it used as a "give it a
-	// moment" band-aid did not change that.
-	dlqSeen := make(chan agent.MailboxMessageResolved, 1)
-	dlqStop, err := a.ConsumeDLQ(ctx, func(m agent.MailboxMessageResolved) error {
-		if m.Type == tag {
-			select {
-			case dlqSeen <- m:
-			default:
-			}
-		}
-		return nil
-	})
+	// InboxConsume starts at DeliverAll on purpose — a consumer that starts late
+	// must still see queued work, and for the DLQ that is the whole point of an ops
+	// surface. But it means a test run inherits every message from previous runs on
+	// the same broker, and a shared broker is exactly what a developer has. The
+	// observable effect is nasty: the handler spends its time re-nakking dead
+	// letters from LAST week while this test's message sits behind them, and the
+	// failure reads as "the DLQ is broken" when it is the test that is not isolated.
+	//
+	// CI never sees this (fresh broker per job), so it has to be fixed here.
+	drainStreams(t, ctx, agentBus)
+
+	// Watch the DLQ raw, before anything is published: the inbox bus is core NATS
+	// pub/sub, so a subscriber that arrives later misses what already went by.
+	raw, err := agentBus.InboxConsume(ctx, bus.InboxConsumeOpts{Subject: "easybus.*.dlq.>"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dlqStop()
+	defer raw.Close()
+	landed := make(chan string, 8)
+	go func() {
+		for {
+			msg, ok := raw.Next(ctx)
+			if !ok {
+				return
+			}
+			var m easybus.MailboxMessage
+			if msg.Envelope != nil && protocol.Coerce(msg.Envelope.Payload, &m) && m.Type == tag {
+				select {
+				case landed <- m.Type:
+				default:
+				}
+			}
+			msg.Ack()
+		}
+	}()
 
 	_ = a.PublishMailbox(ctx, T, "sess-poison", tag, map[string]any{"n": 1})
 
@@ -1599,20 +1670,85 @@ func testPoisonEscalation(t *testing.T, newPair Factory) {
 	defer stop()
 
 	select {
-	case n := <-done:
-		// The DLQ subscription is already live (see above), so the message that
-		// lands there cannot be missed — only waited for.
+	case <-done:
 		select {
-		case dm := <-dlqSeen:
-			if dm.Type != tag {
-				t.Fatalf("DLQ type = %q", dm.Type)
+		case got := <-landed:
+			if got != tag {
+				t.Fatalf("DLQ type = %q, want %q", got, tag)
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatal("poison message never landed in the DLQ")
+			t.Fatalf("the dead letter never reached the DLQ stream (message %q)", tag)
 		}
-		_ = n
 	case <-time.After(20 * time.Second):
 		t.Fatal("message did not reach maxNaks deliveries")
+	}
+}
+
+// TestDLQConsumerDelivers is claim (b) from the comment above: ConsumeDLQ — the
+// ops surface for triage — must hand a handler the dead letters that arrive while
+// it is watching.
+//
+// KNOWN FAILURE, and it is a REAL defect, not a test artifact. Measured: the
+// consumer drains whatever was already in the stream (15 messages from earlier
+// runs) and then stops delivering; a dead letter published afterwards sits in the
+// stream but never reaches the handler (confirmed by reading the same stream with
+// a plain consumer, which does see it).
+//
+// The mechanism is not yet pinned down. Two candidates, and one query tells them
+// apart: consumer NumPending == 0 while messages remain (the pull loop thinks it
+// is drained) versus NumAckPending == MaxAckPending (unacked messages are blocking
+// delivery).
+func testDLQConsumerDelivers(t *testing.T, newPair Factory) {
+	agentBus, _, cleanup := newPair(t)
+	defer cleanup()
+	ctx := context.Background()
+	a := agent.New(agentBus)
+
+	// Same isolation reasoning as testPoisonEscalation.
+	drainStreams(t, ctx, agentBus)
+
+	seen := make(chan string, 16)
+	stop, err := a.ConsumeDLQ(ctx, func(m agent.MailboxMessageResolved) error {
+		select {
+		case seen <- m.Type:
+		default:
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	// The subscription is established asynchronously; give it a beat so the test
+	// fails on DELIVERY, not on a subscribe race.
+	time.Sleep(500 * time.Millisecond)
+
+	tag := "dlq-deliver-" + protocol.NewID()[:6]
+	_ = a.PublishMailbox(ctx, T, "sess-poison-2", tag, map[string]any{"n": 1})
+
+	// Poison it so it is parked: three failures, then Term.
+	var n int
+	stopMb, err := a.ConsumeMailbox(ctx, func(m agent.MailboxMessageResolved) error {
+		n++
+		return fmt.Errorf("boom %d", n)
+	}, 50, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopMb()
+
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case got := <-seen:
+			if got == tag {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("ConsumeDLQ never delivered %q (it may have seen others; "+
+				"see the doc comment for the measured behaviour)", tag)
+		}
 	}
 }
 

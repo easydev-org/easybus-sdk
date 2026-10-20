@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -513,6 +514,39 @@ func (s *inboxSub) Next(ctx context.Context) (*bus.InboxMsg, bool) {
 }
 
 func (s *inboxSub) Close() error { return s.sub.Unsubscribe() }
+
+// InboxPurge deletes every retained message matching the channel filter.
+//
+// Callers pass the same shape they subscribe with, including the exported
+// wildcards, which already end in '.' (`MailboxWildcardAll` is
+// "easybus.*.mailbox."). Appending ".>" blindly produced "…mailbox..>", a filter
+// that matches nothing — and the purge still reported success while the stream
+// kept every message. That silent no-op is why this completes the filter
+// deliberately instead of concatenating.
+func (b *Bus) InboxPurge(ctx context.Context, ch string) error {
+	if ch == "" {
+		return fmt.Errorf("purge: channel is required")
+	}
+	filter := ch
+	switch {
+	case strings.HasSuffix(filter, ">"):
+		// already a full wildcard
+	case strings.HasSuffix(filter, "."):
+		filter += ">"
+	default:
+		filter += ".>"
+	}
+	stream := streamFor(ch)
+	// Subject narrows the purge to this channel: the mailbox and DLQ streams are
+	// shared by every tenant, so an unfiltered purge would wipe them.
+	if err := b.js.PurgeStream(stream, &nats.StreamPurgeRequest{Subject: filter}); err != nil {
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			return nil // nothing has been published there yet
+		}
+		return fmt.Errorf("purge %s on %s: %w", filter, stream, err)
+	}
+	return nil
+}
 
 func (b *Bus) ObjectPut(ctx context.Context, name string, data []byte) error {
 	os, err := b.js.CreateObjectStore(&nats.ObjectStoreConfig{Bucket: objectBucket, TTL: 24 * 3600 * 1e9})
