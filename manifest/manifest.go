@@ -139,9 +139,16 @@ func (m *Manifest) validateConfig() error {
 		}
 		// A secret knob is a credential: its value is never returned to a
 		// client, and a `default` would ride the (broadcast) manifest — so a
-		// secret MUST be a string and MUST NOT declare a default.
-		if c.Type != "" && c.Type != "string" {
-			return fmt.Errorf("manifest: config %q: kind=secret requires type=string (got %q)", c.Name, c.Type)
+		// secret MUST NOT declare a default.
+		//
+		// It may be STRUCTURED (a list/object of records that each carry their own
+		// `kind: secret` field, e.g. the sandbox list with per-sandbox tokens):
+		// withholding the whole knob is then a second, stronger guard on top of
+		// the per-field masking.
+		switch c.Type {
+		case "", "string", "list", "object":
+		default:
+			return fmt.Errorf("manifest: config %q: kind=secret requires type string, list or object (got %q)", c.Name, c.Type)
 		}
 		if c.Default != nil && c.Default != "" {
 			return fmt.Errorf("manifest: config %q: kind=secret must not declare a default", c.Name)
