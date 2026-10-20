@@ -136,7 +136,13 @@ message ExtensionVariableValue {
 // ExtensionConfigItem describes one configuration knob.
 message ExtensionConfigItem {
   string name = 1;
-  // type: string | number | boolean | enum | json
+  // type: string | number | boolean | enum | json | list | object
+  //
+  // `json` is the FALLBACK: a json knob with no `fields` is a raw blob, which is
+  // how every pre-existing extension declares structured data. `list` / `object`
+  // plus `fields` describe the SHAPE, so a client can render a real form (a card
+  // per list item, a "+" to add, a picker for an enum field) instead of a JSON
+  // textarea, and the agent can validate the value.
   string type = 2;
   // kind: value (default) | model
   optional string kind = 3;
@@ -149,6 +155,37 @@ message ExtensionConfigItem {
   // Capability is REQUIRED when kind == model (the modality a model picker is
   // scoped to). Open string: text/image/embedding/... .
   optional string capability = 9;
+  // fields types a structured knob: the keys of an `object`, or of each `list`
+  // item when item_type == "object".
+  repeated ConfigFieldSchema fields = 10;
+  // item_type is the element type when type == "list"
+  // (object | string | number | boolean).
+  optional string item_type = 11;
+  // min_items / max_items bound a list (0 = unbounded).
+  optional int32 min_items = 12;
+  optional int32 max_items = 13;
+}
+
+// ConfigFieldSchema declares ONE key of a structured config value.
+//
+// It exists so a structured knob is a form, not a JSON string: `enum` becomes a
+// picker (e.g. os -> linux | windows | macos | android), `kind: secret` a masked
+// input, `format: uri` a URL field. `fields` nests one level for an object
+// field; the renderer and the validator both stop there on purpose.
+message ConfigFieldSchema {
+  string name = 1;
+  // type: string | number | boolean | enum | json | object
+  string type = 2;
+  // kind: value (default) | secret (never echoed back to a client)
+  optional string kind = 3;
+  // format narrows a string: uri | host | path | email | duration | semver
+  optional string format = 4;
+  repeated string enum_values = 5;
+  google.protobuf.Value default = 6;
+  bool required = 7;
+  optional string description = 8;
+  map<string, string> descriptions = 9;
+  repeated ConfigFieldSchema fields = 10;
 }
 
 // ConfigSet is a request to set a config value (ack/reject).

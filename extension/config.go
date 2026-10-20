@@ -38,9 +38,48 @@ type ConfigSpec struct {
 	EnumValues []string
 	Default    any
 	Scope      string // "global" | "session" (default global)
+	// Fields types a STRUCTURED knob (Type "list" or "object"): the shape of each
+	// object / each list item. Empty means the knob is untyped — a `json` blob,
+	// which is the backward-compatible fallback every existing extension relies
+	// on. With Fields a client can render a real form (one card per list item, a
+	// "+" to add, a picker for an enum field) instead of a JSON textarea.
+	Fields []FieldSpec
+	// ItemType is the element type when Type == "list": "object" | "string" |
+	// "number" | "boolean".
+	ItemType string
+	// MinItems / MaxItems bound a list (0 = unbounded).
+	MinItems int
+	MaxItems int
 	// Required gates tools that depend on this config: an agent may refuse to
 	// expose them until the value is set.
 	Required bool
+}
+
+// FieldSpec types ONE key of a structured config value (or one list item's key).
+//
+// It exists so a client can render a real form instead of a JSON textarea: an
+// `enum` becomes a picker, `kind: secret` a masked input, `format: uri` a URL
+// field, and a `list` of objects becomes repeatable cards with a "+" to add.
+// The SERVER validates against the same shape, so bypassing the UI cannot save
+// a malformed value.
+type FieldSpec struct {
+	Name string
+	// Type is string | number | boolean | enum | json | object.
+	Type string
+	// Kind is "value" (default) or "secret" (never echoed back to a client).
+	Kind string
+	// Format narrows a string: uri | host | path | email | duration | semver.
+	// A client uses it for a keyboard/input type and a hint; the server uses it
+	// to validate.
+	Format       string
+	EnumValues   []string
+	Default      any
+	Required     bool
+	Description  string
+	Descriptions map[string]string
+	// Fields makes this field an object (one level of nesting: enough for every
+	// current knob, and it keeps the renderer honest).
+	Fields []FieldSpec
 }
 
 // OnConfigChangeFunc receives applied config changes. Returning an error (or

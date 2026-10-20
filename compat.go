@@ -23,17 +23,20 @@ type (
 	ExtensionVariable      = easybusv1.ExtensionVariable
 	ExtensionVariableValue = easybusv1.ExtensionVariableValue
 	ExtensionConfigItem    = easybusv1.ExtensionConfigItem
-	ConfigSet              = easybusv1.ConfigSet
-	ConfigSnapshot         = easybusv1.ConfigSnapshot
-	HookCall               = easybusv1.HookCall
-	HookEvent              = easybusv1.HookEvent
-	HookResponse           = easybusv1.HookResponse
-	LifecycleEvent         = easybusv1.LifecycleEvent
-	MailboxMessage         = easybusv1.MailboxMessage
-	InterruptSignal        = easybusv1.InterruptSignal
-	ExtensionTool          = easybusv1.ExtensionTool
-	ExtensionManifest      = easybusv1.ExtensionManifest
-	HookSpec               = easybusv1.HookSpec
+	// ConfigFieldSchema types one key of a structured config value (or one key of
+	// each list item), so a client can render a form instead of a JSON textarea.
+	ConfigFieldSchema = easybusv1.ConfigFieldSchema
+	ConfigSet         = easybusv1.ConfigSet
+	ConfigSnapshot    = easybusv1.ConfigSnapshot
+	HookCall          = easybusv1.HookCall
+	HookEvent         = easybusv1.HookEvent
+	HookResponse      = easybusv1.HookResponse
+	LifecycleEvent    = easybusv1.LifecycleEvent
+	MailboxMessage    = easybusv1.MailboxMessage
+	InterruptSignal   = easybusv1.InterruptSignal
+	ExtensionTool     = easybusv1.ExtensionTool
+	ExtensionManifest = easybusv1.ExtensionManifest
+	HookSpec          = easybusv1.HookSpec
 )
 
 // Enum types (aliases to the generated enum types).

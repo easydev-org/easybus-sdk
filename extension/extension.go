@@ -197,6 +197,45 @@ func orDefault(v, def string) string {
 	return v
 }
 
+// fieldSchemas maps a structured knob's shape onto the wire type.
+//
+// Recursion is deliberate but SHALLOW in practice: a field may itself be an
+// object (one level covers every current knob), and both the console renderer
+// and the validator stop at that depth rather than growing an unbounded tree.
+func fieldSchemas(in []FieldSpec) []*easybus.ConfigFieldSchema {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*easybus.ConfigFieldSchema, 0, len(in))
+	for _, f := range in {
+		fld := &easybus.ConfigFieldSchema{
+			Name: f.Name, Type: f.Type, Required: f.Required,
+			EnumValues: f.EnumValues,
+		}
+		if f.Kind != "" {
+			k := f.Kind
+			fld.Kind = &k
+		}
+		if f.Format != "" {
+			fm := f.Format
+			fld.Format = &fm
+		}
+		if f.Default != nil {
+			fld.Default = easybus.Value(f.Default)
+		}
+		if f.Description != "" {
+			d := f.Description
+			fld.Description = &d
+		}
+		if f.Descriptions != nil {
+			fld.Descriptions = f.Descriptions
+		}
+		fld.Fields = fieldSchemas(f.Fields)
+		out = append(out, fld)
+	}
+	return out
+}
+
 func New(b bus.Bus, cfg Config) *Extension {
 	e := &Extension{
 		b:           b,
@@ -262,6 +301,23 @@ func New(b bus.Bus, cfg Config) *Extension {
 				item.Default = easybus.Value(spec.Default)
 			}
 			item.Scope = orDefault(spec.Scope, "global")
+			// A structured knob ships its SHAPE, so the console can render a form
+			// (a card per list item with a "+", a picker for an enum field)
+			// instead of a JSON textarea. Empty Fields keeps the old behaviour: a
+			// json blob, untouched.
+			item.Fields = fieldSchemas(spec.Fields)
+			if spec.ItemType != "" {
+				it := spec.ItemType
+				item.ItemType = &it
+			}
+			if spec.MinItems > 0 {
+				n := int32(spec.MinItems)
+				item.MinItems = &n
+			}
+			if spec.MaxItems > 0 {
+				n := int32(spec.MaxItems)
+				item.MaxItems = &n
+			}
 			e.manifest.Config = append(e.manifest.Config, item)
 		}
 	}

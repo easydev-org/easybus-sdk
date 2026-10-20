@@ -44,15 +44,59 @@ type ManifestVariable struct {
 
 // ManifestConfig declares one config knob the agent may set at runtime.
 type ManifestConfig struct {
-	Name         string            `yaml:"name"`
-	Type         string            `yaml:"type"` // string | number | boolean | enum | json
-	Kind         string            `yaml:"kind"` // "value" (default) | "model"
-	Capability   string            `yaml:"capability"`
+	Name string `yaml:"name"`
+	// Type selects how the value is entered and validated:
+	//
+	//	string | number | boolean | enum | json
+	//	list   | object        (structured; see Fields / ItemType)
+	//
+	// `json` remains as the FALLBACK: a json knob with no `fields` is still a raw
+	// blob, so existing extensions keep working untouched.
+	Type       string `yaml:"type"`
+	Kind       string `yaml:"kind"` // "value" (default) | "model"
+	Capability string `yaml:"capability"`
+	// EnumValues are the allowed choices when Type == "enum".
 	EnumValues   []string          `yaml:"enum_values"`
 	Default      any               `yaml:"default"`
 	Description  string            `yaml:"description"`
 	Descriptions map[string]string `yaml:"descriptions"`
 	Scope        string            `yaml:"scope"` // "global" | "session"
+	// Fields types the SHAPE of a structured knob:
+	//
+	//	Type == "object"  -> Fields describe that object's keys.
+	//	Type == "list"    -> Fields describe each ITEM (ItemType must be "object",
+	//	                     or Fields must be empty for a list of scalars).
+	//
+	// Why this exists: without it a structured knob is one `json` textarea, and
+	// every user hand-writes JSON (and a typo is only discovered at run time).
+	// With Fields a client renders a real form — one card per list item, a "+" to
+	// add, a picker for an enum field — and the SERVER can validate the shape.
+	Fields []ManifestField `yaml:"fields"`
+	// ItemType is the element type for Type == "list" ("object" | "string" |
+	// "number" | "boolean").
+	ItemType string `yaml:"item_type"`
+	// Required marks a structured knob that must be non-empty.
+	Required bool `yaml:"required"`
+	// MinItems / MaxItems bound a list (0 = unbounded).
+	MinItems int `yaml:"min_items"`
+	MaxItems int `yaml:"max_items"`
+}
+
+// ManifestField declares one key of a structured config value.
+type ManifestField struct {
+	Name         string            `yaml:"name"`
+	Type         string            `yaml:"type"`   // string | number | boolean | enum | json
+	Kind         string            `yaml:"kind"`   // "value" (default) | "secret"
+	Format       string            `yaml:"format"` // uri | host | path | email | duration | semver
+	EnumValues   []string          `yaml:"enum_values"`
+	Default      any               `yaml:"default"`
+	Required     bool              `yaml:"required"`
+	Description  string            `yaml:"description"`
+	Descriptions map[string]string `yaml:"descriptions"`
+	// Fields lets a field be an object itself (one level of nesting is enough for
+	// every current knob and keeps the renderer honest: recursion is unbounded
+	// complexity for no current use).
+	Fields []ManifestField `yaml:"fields"`
 }
 
 type ManifestHooks struct {
@@ -174,6 +218,10 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 			EnumValues:   c.EnumValues,
 			Default:      c.Default,
 			Scope:        c.Scope,
+			Fields:       toFieldSpecs(c.Fields),
+			ItemType:     c.ItemType,
+			MinItems:     c.MinItems,
+			MaxItems:     c.MaxItems,
 		}
 	}
 	if m.Hooks != nil {
@@ -187,4 +235,31 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		}
 	}
 	return cfg
+}
+
+// toFieldSpecs maps the YAML field declarations onto the wire-facing specs.
+//
+// It recurses one level (a field may itself be an object) because a knob like
+// "servers" nests an object per host; deeper nesting is not used anywhere and the
+// client renderer stops at this depth on purpose.
+func toFieldSpecs(in []ManifestField) []extension.FieldSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]extension.FieldSpec, 0, len(in))
+	for _, f := range in {
+		out = append(out, extension.FieldSpec{
+			Name:         f.Name,
+			Type:         f.Type,
+			Kind:         f.Kind,
+			Format:       f.Format,
+			EnumValues:   f.EnumValues,
+			Default:      f.Default,
+			Required:     f.Required,
+			Description:  f.Description,
+			Descriptions: f.Descriptions,
+			Fields:       toFieldSpecs(f.Fields),
+		})
+	}
+	return out
 }
