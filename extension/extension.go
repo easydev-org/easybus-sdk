@@ -270,6 +270,10 @@ func New(b bus.Bus, cfg Config) *Extension {
 				InputSchema:    easybus.Struct(spec.InputSchema),
 				RequiredConfig: spec.RequiredConfig,
 			}
+			if spec.Namespace != "" {
+				ns := spec.Namespace
+				t.Namespace = &ns
+			}
 			e.manifest.Tools = append(e.manifest.Tools, t)
 		}
 	}
@@ -341,6 +345,17 @@ func New(b bus.Bus, cfg Config) *Extension {
 	}
 	if len(cfg.Lifecycle) > 0 {
 		e.manifest.Lifecycle = append([]string(nil), cfg.Lifecycle...)
+	}
+	// Publish the declared groupings. Without this the manifest carries per-tool
+	// and per-knob `namespace` tags that reference names the client never sees,
+	// so it can only sort them alphabetically instead of using the author's order.
+	for _, ns := range cfg.Namespaces {
+		out := &easybus.ExtensionNamespace{Name: ns.Name, Descriptions: ns.Descriptions}
+		if ns.Description != "" {
+			d := ns.Description
+			out.Description = &d
+		}
+		e.manifest.Namespaces = append(e.manifest.Namespaces, out)
 	}
 	if len(cfg.CallHooks) > 0 || len(cfg.EventHooks) > 0 || len(cfg.HookSchemas.Call) > 0 || len(cfg.HookSchemas.Event) > 0 {
 		h := &easybus.HookSpec{
