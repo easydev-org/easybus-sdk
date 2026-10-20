@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      # -race matters: the agent and extension sides run concurrently by design,
+      # and the conformance suite exercises both ends of every RPC.
+      - name: test
+        run: go test -race ./...
+
+      # The conformance suite runs against an ephemeral broker when NATS is not
+      # configured, but a real broker is what CI should prove, so start one and
+      # point the suite at it.
+      - name: start nats
+        run: |
+          go install github.com/nats-io/nats-server/v2@latest
+          "$(go env GOPATH)/bin/nats-server" -js -p 4222 &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then echo "nats up"; exit 0; fi
+            sleep 1
+          done
+          echo "nats did not start"; exit 1
+
+      - name: conformance against a real broker
+        env:
+          EASYBUS_NATS_URL: nats://127.0.0.1:4222
+        run: go test -race ./transport/nats/ -run 'Conformance|Live' -v
