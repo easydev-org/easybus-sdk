@@ -53,7 +53,10 @@ type ToolSpec struct {
 	// RequiredConfig declares the config names this tool requires to run (a tool
 	// may share a required config with sibling tools). Absent = no config gating.
 	RequiredConfig []string
-	Execute        func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
+	// Namespace groups this tool with siblings that do the same kind of job
+	// (pvc, build, storage, ...). Organisational only: the tool keeps its name.
+	Namespace string
+	Execute   func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
 }
 
 // VariableSpec describes one template variable and its lazy resolver.
@@ -317,6 +320,10 @@ func New(b bus.Bus, cfg Config) *Extension {
 			if spec.MaxItems > 0 {
 				n := int32(spec.MaxItems)
 				item.MaxItems = &n
+			}
+			if spec.Namespace != "" {
+				ns := spec.Namespace
+				item.Namespace = &ns
 			}
 			e.manifest.Config = append(e.manifest.Config, item)
 		}

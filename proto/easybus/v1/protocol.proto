@@ -164,6 +164,16 @@ message ExtensionConfigItem {
   // min_items / max_items bound a list (0 = unbounded).
   optional int32 min_items = 12;
   optional int32 max_items = 13;
+  // namespace scopes this knob's STORED VALUE to one namespace of the
+  // extension (see ExtensionTool.namespace). Empty = extension-level: shared by
+  // every namespace of that extension, which is what an endpoint/token knob
+  // wants.
+  //
+  // WHY this exists: config used to live in ONE flat per-tenant namespace, so
+  // two extensions declaring `sandboxes` silently shared a single value. The
+  // stored key is now (tenant, extId, namespace, name), so nothing crosses an
+  // extension boundary by accident.
+  optional string namespace = 14;
 }
 
 // ConfigFieldSchema declares ONE key of a structured config value.
@@ -271,6 +281,10 @@ message ExtensionTool {
   // JSON Schema describing tool input.
   google.protobuf.Struct input_schema = 4;
   repeated string required_config = 5;
+  // namespace groups this tool with others that do the same kind of job
+  // (pvc, build, storage, ...). The tool's NAME is unchanged — callers keep
+  // invoking `ops-create-pvc`; this only lets a client group it in the UI.
+  optional string namespace = 6;
 }
 
 // ExtensionManifest is an extension's self-description.

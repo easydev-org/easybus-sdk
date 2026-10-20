@@ -18,6 +18,28 @@ type Manifest struct {
 	Config    []ManifestConfig   `yaml:"config"`
 	Lifecycle []string           `yaml:"lifecycle"`
 	Hooks     *ManifestHooks     `yaml:"hooks"`
+	// Namespaces groups this extension's tools and config into named areas
+	// (pvc, build, storage, ...).
+	//
+	// WHY: one extension commonly covers several unrelated jobs, and a flat list
+	// of 44 tools with 4 knobs is hard to reason about — and, worse, config was a
+	// GLOBAL flat namespace, so two extensions declaring a knob of the same name
+	// silently shared one stored value. A namespace is the unit of isolation:
+	// config is stored per (extension, namespace), so `ops.build.addr` and
+	// `ops.pvc.addr` are different values while `ops`-level knobs stay shared
+	// across its namespaces.
+	//
+	// Declaring a namespace here is OPTIONAL (purely descriptive: a display label
+	// and ordering); it becomes meaningful by being referenced from a tool or a
+	// config knob via `namespace:`.
+	Namespaces []ManifestNamespace `yaml:"namespaces"`
+}
+
+// ManifestNamespace describes one grouping of an extension's tools and config.
+type ManifestNamespace struct {
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	Descriptions map[string]string `yaml:"descriptions"`
 }
 
 // ManifestTool declares one tool's metadata; handlers are bound by name.
@@ -32,6 +54,10 @@ type ManifestTool struct {
 	// RequiredConfig lists the config names this tool requires to run (a tool may
 	// share a required config with sibling tools). Absent = no config gating.
 	RequiredConfig []string `yaml:"required_config"`
+	// Namespace puts this tool in one of the extension's declared namespaces.
+	// Purely organisational: the tool's NAME is unchanged (callers keep using
+	// `ops-create-pvc`), but a client can group it in the UI.
+	Namespace string `yaml:"namespace"`
 }
 
 // ManifestVariable declares one prompt template variable.
@@ -80,6 +106,10 @@ type ManifestConfig struct {
 	// MinItems / MaxItems bound a list (0 = unbounded).
 	MinItems int `yaml:"min_items"`
 	MaxItems int `yaml:"max_items"`
+	// Namespace scopes this knob's STORED VALUE to one of the extension's
+	// namespaces. Empty = extension-level, shared by every namespace of that
+	// extension (the endpoint/token case).
+	Namespace string `yaml:"namespace"`
 }
 
 // ManifestField declares one key of a structured config value.
@@ -188,6 +218,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		h.Descriptions = t.Descriptions
 		h.InputSchema = t.InputSchema
 		h.RequiredConfig = t.RequiredConfig
+		h.Namespace = t.Namespace
 		tools[t.Name] = h
 	}
 
@@ -229,6 +260,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 			ItemType:     c.ItemType,
 			MinItems:     c.MinItems,
 			MaxItems:     c.MaxItems,
+			Namespace:    c.Namespace,
 		}
 	}
 	if m.Hooks != nil {

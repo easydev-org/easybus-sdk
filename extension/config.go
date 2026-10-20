@@ -50,6 +50,9 @@ type ConfigSpec struct {
 	// MinItems / MaxItems bound a list (0 = unbounded).
 	MinItems int
 	MaxItems int
+	// Namespace scopes this knob's stored value to one namespace of the
+	// extension. Empty = extension-level (shared by all its namespaces).
+	Namespace string
 	// Required gates tools that depend on this config: an agent may refuse to
 	// expose them until the value is set.
 	Required bool

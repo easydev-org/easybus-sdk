@@ -859,8 +859,18 @@ type ExtensionConfigItem struct {
 	// (object | string | number | boolean).
 	ItemType *string `protobuf:"bytes,11,opt,name=item_type,json=itemType,proto3,oneof" json:"item_type,omitempty"`
 	// min_items / max_items bound a list (0 = unbounded).
-	MinItems      *int32 `protobuf:"varint,12,opt,name=min_items,json=minItems,proto3,oneof" json:"min_items,omitempty"`
-	MaxItems      *int32 `protobuf:"varint,13,opt,name=max_items,json=maxItems,proto3,oneof" json:"max_items,omitempty"`
+	MinItems *int32 `protobuf:"varint,12,opt,name=min_items,json=minItems,proto3,oneof" json:"min_items,omitempty"`
+	MaxItems *int32 `protobuf:"varint,13,opt,name=max_items,json=maxItems,proto3,oneof" json:"max_items,omitempty"`
+	// namespace scopes this knob's STORED VALUE to one namespace of the
+	// extension (see ExtensionTool.namespace). Empty = extension-level: shared by
+	// every namespace of that extension, which is what an endpoint/token knob
+	// wants.
+	//
+	// WHY this exists: config used to live in ONE flat per-tenant namespace, so
+	// two extensions declaring `sandboxes` silently shared a single value. The
+	// stored key is now (tenant, extId, namespace, name), so nothing crosses an
+	// extension boundary by accident.
+	Namespace     *string `protobuf:"bytes,14,opt,name=namespace,proto3,oneof" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -984,6 +994,13 @@ func (x *ExtensionConfigItem) GetMaxItems() int32 {
 		return *x.MaxItems
 	}
 	return 0
+}
+
+func (x *ExtensionConfigItem) GetNamespace() string {
+	if x != nil && x.Namespace != nil {
+		return *x.Namespace
+	}
+	return ""
 }
 
 // ConfigFieldSchema declares ONE key of a structured config value.
@@ -1663,8 +1680,12 @@ type ExtensionTool struct {
 	// JSON Schema describing tool input.
 	InputSchema    *structpb.Struct `protobuf:"bytes,4,opt,name=input_schema,json=inputSchema,proto3" json:"input_schema,omitempty"`
 	RequiredConfig []string         `protobuf:"bytes,5,rep,name=required_config,json=requiredConfig,proto3" json:"required_config,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// namespace groups this tool with others that do the same kind of job
+	// (pvc, build, storage, ...). The tool's NAME is unchanged — callers keep
+	// invoking `ops-create-pvc`; this only lets a client group it in the UI.
+	Namespace     *string `protobuf:"bytes,6,opt,name=namespace,proto3,oneof" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExtensionTool) Reset() {
@@ -1730,6 +1751,13 @@ func (x *ExtensionTool) GetRequiredConfig() []string {
 		return x.RequiredConfig
 	}
 	return nil
+}
+
+func (x *ExtensionTool) GetNamespace() string {
+	if x != nil && x.Namespace != nil {
+		return *x.Namespace
+	}
+	return ""
 }
 
 // ExtensionManifest is an extension's self-description.
@@ -1981,7 +2009,7 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\f_description\"B\n" +
 	"\x16ExtensionVariableValue\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\x92\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\xc3\x05\n" +
 	"\x13ExtensionConfigItem\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x17\n" +
@@ -1999,7 +2027,8 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	" \x03(\v2\x1d.easybus.v1.ConfigFieldSchemaR\x06fields\x12 \n" +
 	"\titem_type\x18\v \x01(\tH\x03R\bitemType\x88\x01\x01\x12 \n" +
 	"\tmin_items\x18\f \x01(\x05H\x04R\bminItems\x88\x01\x01\x12 \n" +
-	"\tmax_items\x18\r \x01(\x05H\x05R\bmaxItems\x88\x01\x01\x1a?\n" +
+	"\tmax_items\x18\r \x01(\x05H\x05R\bmaxItems\x88\x01\x01\x12!\n" +
+	"\tnamespace\x18\x0e \x01(\tH\x06R\tnamespace\x88\x01\x01\x1a?\n" +
 	"\x11DescriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\a\n" +
@@ -2011,7 +2040,9 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\n" +
 	"_min_itemsB\f\n" +
 	"\n" +
-	"_max_items\"\xf8\x03\n" +
+	"_max_itemsB\f\n" +
+	"\n" +
+	"_namespace\"\xf8\x03\n" +
 	"\x11ConfigFieldSchema\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x17\n" +
@@ -2088,16 +2119,19 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tH\x00R\vsessionName\x88\x01\x01\x12\x1b\n" +
 	"\x06reason\x18\x02 \x01(\tH\x01R\x06reason\x88\x01\x01B\x0f\n" +
 	"\r_session_nameB\t\n" +
-	"\a_reason\"\xbc\x02\n" +
+	"\a_reason\"\xed\x02\n" +
 	"\rExtensionTool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12O\n" +
 	"\fdescriptions\x18\x03 \x03(\v2+.easybus.v1.ExtensionTool.DescriptionsEntryR\fdescriptions\x12:\n" +
 	"\finput_schema\x18\x04 \x01(\v2\x17.google.protobuf.StructR\vinputSchema\x12'\n" +
-	"\x0frequired_config\x18\x05 \x03(\tR\x0erequiredConfig\x1a?\n" +
+	"\x0frequired_config\x18\x05 \x03(\tR\x0erequiredConfig\x12!\n" +
+	"\tnamespace\x18\x06 \x01(\tH\x00R\tnamespace\x88\x01\x01\x1a?\n" +
 	"\x11DescriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfb\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\f\n" +
+	"\n" +
+	"_namespace\"\xfb\x02\n" +
 	"\x11ExtensionManifest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\"\n" +
@@ -2240,6 +2274,7 @@ func file_easybus_v1_protocol_proto_init() {
 	file_easybus_v1_protocol_proto_msgTypes[16].OneofWrappers = []any{}
 	file_easybus_v1_protocol_proto_msgTypes[17].OneofWrappers = []any{}
 	file_easybus_v1_protocol_proto_msgTypes[18].OneofWrappers = []any{}
+	file_easybus_v1_protocol_proto_msgTypes[19].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
