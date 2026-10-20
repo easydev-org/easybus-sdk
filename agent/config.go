@@ -312,6 +312,22 @@ func validateConfigValue(item *easybus.ExtensionConfigItem, value any) string {
 		if _, ok := value.(bool); !ok {
 			return fmt.Sprintf("expected boolean, got %T", value)
 		}
+	case "list", "object":
+		// A structured knob carries a JSON list/object. Accept it in the two forms
+		// a caller actually has: an already-decoded slice/map, or the JSON text it
+		// was stored as. Rejecting these made every `type: list` knob (sandboxes,
+		// servers) IMPOSSIBLE to set through SetConfig, even though the manifest
+		// declared it — the failure read as "unknown config type", which points at
+		// the manifest instead of at this validator.
+		if value == nil {
+			return "expected a list or object, got nil"
+		}
+		if s, ok := value.(string); ok {
+			var probe any
+			if err := json.Unmarshal([]byte(s), &probe); err != nil {
+				return fmt.Sprintf("expected JSON for a %s value, got unparseable string: %v", item.Type, err)
+			}
+		}
 	case "enum":
 		s, ok := value.(string)
 		if !ok {
