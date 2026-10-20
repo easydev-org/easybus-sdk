@@ -80,7 +80,7 @@ func serveEchoExtReplica(t *testing.T, extBus bus.Bus, replicaID string) *extens
 				},
 			},
 			"big": {
-				Description: "returns >256KB content (object offload)",
+				Description: "returns more text than the content cap allows",
 				Execute: func(ctx context.Context, args map[string]any, callID, session, tenant string) (extension.ToolResultData, error) {
 					big := make([]byte, 300*1024)
 					for i := range big {
@@ -286,19 +286,28 @@ func testToolObject(t *testing.T, newPair Factory) {
 	defer ext.Close()
 
 	a := agent.New(agentBus)
+	// Oversized TEXT is a tool error, not a silent offload.
+	//
+	// This test used to assert that a tool returning 300 KiB of `content` came
+	// back as an ObjectRef. Nothing ever implemented that, and the extension
+	// deliberately does the opposite: `content` goes into the model's context, so
+	// text above maxToolContentBytes is REJECTED with an actionable message
+	// telling the tool to return a file instead (see the const's doc comment).
+	// The test therefore encoded a capability that does not exist — CI is what
+	// surfaced it, because this suite had never run there.
 	tr, err := a.CallTool(context.Background(), T, "sess-1", "conf-ext", "big", "c3", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tr.Object == nil {
-		t.Fatalf("expected object offload, got %+v", tr)
+	if tr.Error == nil {
+		t.Fatalf("oversized content must be rejected, got %+v", tr)
 	}
-	data, err := a.GetObject(context.Background(), T, tr.Object.Id)
-	if err != nil {
-		t.Fatal(err)
+	if tr.Error.Code != easybus.ToolResultErrorCodeInvalidArgument {
+		t.Errorf("code = %q, want invalid_argument", tr.Error.Code)
 	}
-	if len(data) != 300*1024 {
-		t.Fatalf("object size = %d", len(data))
+	// The message has to say what to do instead, or the tool author is stuck.
+	if !strings.Contains(tr.Error.Message, "file") {
+		t.Errorf("the rejection must point at returning a file, got: %s", tr.Error.Message)
 	}
 }
 
@@ -1487,7 +1496,12 @@ func testPresenceReplicas(t *testing.T, newPair Factory) {
 	if err := agentBus.KVDelete(ctx, extension.PresenceBucket, "conf-ext.pod-b"); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(5 * time.Second)
+	// 15s, not 5s: this waits for a KV DELETE to propagate to a watch on a
+	// different connection, which is milliseconds on a fast local broker and
+	// noticeably slower on a loaded CI runner. 5s was enough to pass locally and
+	// flaky on CI. The wait is still bounded — a watcher that never fires still
+	// fails the test.
+	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if a.Manifest("conf-ext") == nil {
 			return
@@ -1545,6 +1559,29 @@ func testPoisonEscalation(t *testing.T, newPair Factory) {
 	ctx := context.Background()
 	a := agent.New(agentBus)
 	tag := "always-fails-" + protocol.NewID()[:6]
+
+	// Subscribe to the DLQ BEFORE anything is published.
+	//
+	// The inbox bus is core NATS pub/sub: a message published while nobody is
+	// subscribed is gone. The old version published first and only subscribed to
+	// the DLQ after the third failure, so it raced — the message was very often
+	// already in the past by then, and the 1s sleep it used as a "give it a
+	// moment" band-aid did not change that.
+	dlqSeen := make(chan agent.MailboxMessageResolved, 1)
+	dlqStop, err := a.ConsumeDLQ(ctx, func(m agent.MailboxMessageResolved) error {
+		if m.Type == tag {
+			select {
+			case dlqSeen <- m:
+			default:
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dlqStop()
+
 	_ = a.PublishMailbox(ctx, T, "sess-poison", tag, map[string]any{"n": 1})
 
 	deliveries := 0
@@ -1563,19 +1600,8 @@ func testPoisonEscalation(t *testing.T, newPair Factory) {
 
 	select {
 	case n := <-done:
-		// it got delivered maxNaks times; give the DLQ copy a moment
-		time.Sleep(time.Second)
-		dlqSeen := make(chan agent.MailboxMessageResolved, 1)
-		dlqStop, err := a.ConsumeDLQ(ctx, func(m agent.MailboxMessageResolved) error {
-			if m.Type == tag {
-				dlqSeen <- m
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer dlqStop()
+		// The DLQ subscription is already live (see above), so the message that
+		// lands there cannot be missed — only waited for.
 		select {
 		case dm := <-dlqSeen:
 			if dm.Type != tag {
