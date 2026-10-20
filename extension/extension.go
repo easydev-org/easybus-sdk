@@ -188,9 +188,14 @@ type OnEventHook func(ctx context.Context, hook, sessionName string, payload any
 
 // Extension is the extension-side role.
 type Extension struct {
-	b           bus.Bus
-	cfg         Config
-	manifest    easybus.ExtensionManifest
+	b        bus.Bus
+	cfg      Config
+	manifest easybus.ExtensionManifest
+	// subsMu guards subs. Serve() installs subscriptions from several goroutines
+	// (one per channel family) while Close() may run at any time, so the slice is
+	// read and appended concurrently. -race caught exactly that on CI:
+	//   Read at ... extension.(*Extension).Close()  vs  append in serveX.
+	subsMu      sync.Mutex
 	subs        []bus.Subscription
 	configStore *ConfigStore
 	// replicaID identifies this process among the extension's replicas; it
@@ -409,14 +414,32 @@ func (e *Extension) Serve(ctx context.Context) error {
 }
 
 func (e *Extension) Close() error {
-	for _, s := range e.subs {
+	// Take and CLEAR the slice under the lock, then close outside it: closing can
+	// block, and the appenders only need the lock to mutate the slice.
+	e.subsMu.Lock()
+	subs := e.subs
+	e.subs = nil
+	e.subsMu.Unlock()
+	for _, s := range subs {
 		_ = s.Close()
 	}
-	e.subs = nil
 	// Leave the presence bucket: delete only THIS replica's key, so sibling
 	// replicas of the same extId stay visible to liveness watchers.
 	_ = e.b.KVDelete(context.Background(), PresenceBucket, e.presenceKey())
 	return e.b.Close()
+}
+
+// track records a subscription so Close() can release it.
+//
+// Every serveX goroutine goes through here; appending directly to e.subs raced
+// with Close (see the subsMu field comment).
+func (e *Extension) track(sub bus.Subscription) {
+	if sub == nil {
+		return
+	}
+	e.subsMu.Lock()
+	e.subs = append(e.subs, sub)
+	e.subsMu.Unlock()
 }
 
 // easybusFeatures is the cooperative feature set this SDK build speaks —
@@ -533,7 +556,7 @@ func (e *Extension) serveDiscovery(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.subs = append(e.subs, sub)
+	e.track(sub)
 	go func() {
 		for {
 			env, ok := sub.Next(ctx)
@@ -555,7 +578,7 @@ func (e *Extension) serveTools(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		e.subs = append(e.subs, sub)
+		e.track(sub)
 		go e.pumpTool(ctx, name, spec, sub)
 	}
 	return nil
@@ -639,7 +662,7 @@ func (e *Extension) serveVariables(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		e.subs = append(e.subs, sub)
+		e.track(sub)
 		go func(name string, spec VariableSpec, sub bus.Subscription) {
 			for {
 				env, ok := sub.Next(ctx)
@@ -671,7 +694,7 @@ func (e *Extension) serveCallHooks(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		e.subs = append(e.subs, sub)
+		e.track(sub)
 		go func(hook string, sub bus.Subscription) {
 			for {
 				env, ok := sub.Next(ctx)
@@ -719,7 +742,7 @@ func (e *Extension) serveEventHooks(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		e.subs = append(e.subs, sub)
+		e.track(sub)
 		go func(hook string, sub bus.Subscription) {
 			for {
 				env, ok := sub.Next(ctx)
@@ -764,7 +787,7 @@ func (e *Extension) serveLifecycle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.subs = append(e.subs, sub)
+	e.track(sub)
 	go func() {
 		for {
 			env, ok := sub.Next(ctx)
@@ -800,7 +823,7 @@ func (e *Extension) serveInterrupt(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.subs = append(e.subs, sub)
+	e.track(sub)
 	go func() {
 		for {
 			env, ok := sub.Next(ctx)
