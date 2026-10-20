@@ -240,6 +240,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		Tools:          tools,
 		Variables:      vars,
 		Config:         map[string]extension.ConfigSpec{},
+		Namespaces:     toNamespaceSpecs(m.Namespaces),
 		Lifecycle:      m.Lifecycle,
 		OnCallHook:     b.OnCallHook,
 		OnEventHook:    b.OnEventHook,
@@ -276,8 +277,20 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 	return cfg
 }
 
-// toFieldSpecs maps the YAML field declarations onto the wire-facing specs.
-//
+// toNamespaceSpecs maps the declared groupings onto the extension config.
+func toNamespaceSpecs(in []ManifestNamespace) []extension.NamespaceSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]extension.NamespaceSpec, 0, len(in))
+	for _, n := range in {
+		out = append(out, extension.NamespaceSpec{
+			Name: n.Name, Description: n.Description, Descriptions: n.Descriptions,
+		})
+	}
+	return out
+}
+
 // It recurses one level (a field may itself be an object) because a knob like
 // "servers" nests an object per host; deeper nesting is not used anywhere and the
 // client renderer stops at this depth on purpose.

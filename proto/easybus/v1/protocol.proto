@@ -177,6 +177,15 @@ message ExtensionConfigItem {
 }
 
 // ConfigFieldSchema declares ONE key of a structured config value.
+// ExtensionNamespace is one declared grouping of an extension's tools and
+// config (e.g. `pvc`, `build`, `storage`).
+message ExtensionNamespace {
+  string name = 1;
+  optional string description = 2;
+  map<string, string> descriptions = 3;
+}
+
+// ConfigFieldSchema declares ONE key of a structured config value.
 //
 // It exists so a structured knob is a form, not a JSON string: `enum` becomes a
 // picker (e.g. os -> linux | windows | macos | android), `kind: secret` a masked
@@ -296,6 +305,10 @@ message ExtensionManifest {
   repeated ExtensionConfigItem config = 5;
   repeated ExtensionTool tools = 6;
   repeated ExtensionVariable prompt_variables = 7;
+  // namespaces declares this extension's groupings (pvc, build, storage, ...).
+  // Tools and config knobs reference them via `namespace:`; the ORDER here is
+  // what a client uses to lay the groups out.
+  repeated ExtensionNamespace namespaces = 10;
   repeated string lifecycle = 8;
   HookSpec hooks = 9;
 }

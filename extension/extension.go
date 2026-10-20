@@ -59,6 +59,13 @@ type ToolSpec struct {
 	Execute   func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
 }
 
+// NamespaceSpec declares one grouping of an extension's tools and config.
+type NamespaceSpec struct {
+	Name         string
+	Description  string
+	Descriptions map[string]string
+}
+
 // VariableSpec describes one template variable and its lazy resolver.
 type VariableSpec struct {
 	Description  string
@@ -76,10 +83,14 @@ type Config struct {
 	// (`<extId>.<replicaId>`) so replicas never overwrite or evict each other.
 	// Resolution order: this field, then EASYBUS_REPLICA_ID, then POD_NAME, then a
 	// random id (see resolveReplicaID). Leave empty to accept the defaults.
-	ReplicaID  string
-	Tools      map[string]ToolSpec
-	Variables  map[string]VariableSpec
-	Config     map[string]ConfigSpec
+	ReplicaID string
+	Tools     map[string]ToolSpec
+	Variables map[string]VariableSpec
+	Config    map[string]ConfigSpec
+	// Namespaces declares this extension's groupings (pvc, build, storage, ...).
+	// Tools and config knobs reference them via their Namespace field; the ORDER
+	// here is what a client uses to lay the groups out.
+	Namespaces []NamespaceSpec
 	CallHooks  []string
 	EventHooks []string
 	Lifecycle  []string // created / forked / renamed / deleted
