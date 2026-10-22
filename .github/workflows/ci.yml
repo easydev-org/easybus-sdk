@@ -22,20 +22,32 @@ jobs:
       - name: test
         run: go test -race ./...
 
-      # The conformance suite runs against an ephemeral broker when NATS is not
-      # configured, but a real broker is what CI should prove, so start one and
-      # point the suite at it.
-      - name: start nats
-        run: |
-          go install github.com/nats-io/nats-server/v2@latest
-          "$(go env GOPATH)/bin/nats-server" -js -p 4222 &
-          for i in $(seq 1 30); do
-            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then echo "nats up"; exit 0; fi
-            sleep 1
-          done
-          echo "nats did not start"; exit 1
+  # Runs in the SAME image the other three SDKs use, against the SAME pinned broker.
+  #
+  # The unit job above starts a broker with `go install …@latest`, which made the
+  # broker an untracked variable: two SDKs could pass against different versions and
+  # nothing would notice. docker-compose.yml pins one image for all four, so "the
+  # four implementations agree" means they agree about one known thing.
+  #
+  # It also proves the build a contributor runs locally is the build CI runs — the
+  # command is the same one in docker-compose.yml.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: conformance against a real broker
-        env:
-          EASYBUS_NATS_URL: nats://127.0.0.1:4222
-        run: go test -race ./transport/nats/ -run 'Conformance|Live' -v
+      # `--exit-code-from` makes the container's exit code the step's exit code, so a
+      # failing assertion fails the job without extra plumbing.
+      - name: conformance in a pinned environment
+        run: |
+          docker compose up --build --abort-on-container-exit \
+            --exit-code-from conformance
+
+      # On failure the container is gone; the logs are the only evidence.
+      - name: logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: down
+        if: always()
+        run: docker compose down -v

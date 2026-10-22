@@ -1,0 +1,17 @@
+{
+  "id": "config-kv-structured-stays-text",
+  "why": "A list/object knob carries a declaration the extension parses itself. Parsing it into a list makes a string-typed reader see nothing, so the knob reads as unset even though the value was delivered. Every sandbox/computer tool requires a structured `sandboxes` knob, so this is the common case, not an edge.",
+  "kind": "kv",
+  "kv": {
+    "key": "t.{tenant}.{ext}.servers",
+    "value": "[{\"name\":\"local\",\"url\":\"http://worker:80\"}]"
+  },
+  "knobs": {
+    "servers": { "type": "list" }
+  },
+  "expect": {
+    "knob": "servers",
+    "value": "[{\"name\":\"local\",\"url\":\"http://worker:80\"}]",
+    "valueType": "string"
+  }
+}

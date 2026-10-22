@@ -1,0 +1,9 @@
+{
+  "id": "protocol-config-bucket",
+  "why": "The config bucket name is a CONTRACT between the agent and every extension: extensions subscribe to `t.*.<extId>.>` in this bucket. An agent writing to a differently-named bucket stores every value where nothing is looking, and each side still looks healthy on its own — which is exactly how it went unnoticed.",
+  "kind": "constant",
+  "constant": {
+    "name": "configKVBucket",
+    "value": "cfg"
+  }
+}

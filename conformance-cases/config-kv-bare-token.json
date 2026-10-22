@@ -1,0 +1,17 @@
+{
+  "id": "config-kv-bare-token",
+  "why": "Same defect as the bare URL, on the value every extension that talks to a service actually holds. A token looks nothing like JSON, so a JSON-only decoder drops it and the extension reports itself unconfigured.",
+  "kind": "kv",
+  "kv": {
+    "key": "t.{tenant}.{ext}.token",
+    "value": "dev-service-token"
+  },
+  "knobs": {
+    "token": { "type": "string" }
+  },
+  "expect": {
+    "knob": "token",
+    "value": "dev-service-token",
+    "valueType": "string"
+  }
+}

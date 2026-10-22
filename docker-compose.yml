@@ -1,0 +1,46 @@
+# Conformance against a REAL broker, with the broker version PINNED.
+#
+# Each SDK carries a copy of this file so CI is identical everywhere, and so a
+# contributor can run the same thing locally with one command:
+#
+#     docker compose up --build --abort-on-container-exit \
+#         --exit-code-from conformance
+#
+# The exit code of `conformance` becomes the exit code of the command, so CI needs
+# no extra plumbing to notice a failure.
+
+name: easybus-conformance
+
+services:
+  # Pinned, not `:latest`. The suite's whole point is that four implementations
+  # agree; letting each pull whatever is newest would make "agrees" mean "agrees
+  # with today's broker", and would change under us without a commit.
+  nats:
+    image: nats:2.15.1-alpine
+    command:
+      - "-js"                 # JetStream: KV, object store, durable consumers
+      - "-p"
+      - "4222"
+      - "-m"
+      - "8222"                # monitoring, so the healthcheck has something to ask
+    healthcheck:
+      # Wait for the broker to ACCEPT, not merely to have started. A container that
+      # is "running" but not yet listening turns a startup race into a flaky test.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+      start_period: 2s
+
+  conformance:
+    build:
+      context: .
+      dockerfile: conformance.Dockerfile
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      # The suite uses this instead of starting its own broker. It still starts one
+      # per case when the variable is absent, so a bare `go test ./...` keeps
+      # working without docker.
+      EASYBUS_NATS_URL: nats://nats:4222

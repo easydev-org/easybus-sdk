@@ -1,0 +1,17 @@
+{
+  "id": "config-kv-envelope-unwraps",
+  "why": "The legacy {\"r\":<rev>,\"v\":<value>} envelope must keep working. Guards the other direction: accepting bare values must not break an agent that still writes the envelope.",
+  "kind": "kv",
+  "kv": {
+    "key": "t.{tenant}.{ext}.poll",
+    "value": "{\"r\":9,\"v\":77}"
+  },
+  "knobs": {
+    "poll": { "type": "number" }
+  },
+  "expect": {
+    "knob": "poll",
+    "value": 77,
+    "valueType": "number"
+  }
+}

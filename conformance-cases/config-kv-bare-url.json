@@ -1,0 +1,17 @@
+{
+  "id": "config-kv-bare-url",
+  "why": "A knob's value is ultimately a string. A URL is not JSON, and a decoder that requires JSON discards the entry — so the extension reports every knob unset while the agent and console insist the value is saved. This is the restart path: the bucket snapshot is the only way a fresh process learns its configuration.",
+  "kind": "kv",
+  "kv": {
+    "key": "t.{tenant}.{ext}.endpoint",
+    "value": "http://easyops.example:80"
+  },
+  "knobs": {
+    "endpoint": { "type": "string" }
+  },
+  "expect": {
+    "knob": "endpoint",
+    "value": "http://easyops.example:80",
+    "valueType": "string"
+  }
+}
