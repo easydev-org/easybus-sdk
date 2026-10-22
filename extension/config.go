@@ -179,8 +179,14 @@ func (e *Extension) rollbackConfigSet(set *easybus.ConfigSet) {
 // at startup and live updates afterwards, so no agent needs to be online.
 func (e *Extension) serveConfig(ctx context.Context) error {
 	if len(e.cfg.Config) == 0 {
+		// An extension that declares no config is the ONLY case where starting with
+		// an empty store is correct. Logging it separates that from "the manifest
+		// was embedded from a stale copy" and from "the watch never delivered".
+		slog.Info("no config declared; skipping the config watch", "ext", e.cfg.ID)
 		return nil
 	}
+	slog.Info("watching config", "ext", e.cfg.ID,
+		"bucket", protocol.ConfigKVBucket, "knobs", len(e.cfg.Config))
 	// A failed KvWatch used to be swallowed entirely (`if ...; err == nil`), which
 	// made "the extension never receives config" indistinguishable from "there is no
 	// config". Say so.
