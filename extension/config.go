@@ -404,15 +404,25 @@ func (e *Extension) applyConfigKV(ev bus.KvEvent) {
 		Revision int64 `json:"r"`
 		Value    any   `json:"v"`
 	}
-	v := any(env.Value)
-	if json.Unmarshal([]byte(ev.Value), &env) == nil && env.Value != nil {
+	var v any
+	switch {
+	case json.Unmarshal([]byte(ev.Value), &env) == nil && env.Value != nil:
+		// Envelope shape: {"r":<rev>,"v":<value>}.
 		v = env.Value
-	} else {
+	default:
+		// Bare value. This is what the agent now writes: the raw knob text, which
+		// for a URL or a token is NOT valid JSON — so `json.Unmarshal` fails and the
+		// old code returned, discarding the entry entirely. Every knob silently
+		// stayed unset while the watch happily reported it had applied the key.
+		//
+		// A JSON-encoded scalar is unwrapped when it parses; anything else is taken
+		// verbatim, because a config value is ultimately a string.
 		var raw any
-		if json.Unmarshal([]byte(ev.Value), &raw) != nil {
-			return
+		if json.Unmarshal([]byte(ev.Value), &raw) == nil {
+			v = raw
+		} else {
+			v = ev.Value
 		}
-		v = raw
 	}
 	if v == nil {
 		return
