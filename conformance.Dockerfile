@@ -42,9 +42,17 @@ RUN apk add --no-cache ca-certificates curl \
  && rm -rf /tmp/nats.tgz /tmp/nats-server-v${NATS_VERSION}-linux-amd64
 
 COPY --from=build /out/conformance.test /usr/local/bin/conformance.test
+# The shared cases are read at RUNTIME, relative to the test binary's working
+# directory (`../conformance-cases`), so they have to ship with the image. Without
+# them TestSharedCases finds no files and TestSharedCasesAreCurrent has no lock to
+# compare — both fail, correctly, and only in the container.
+COPY --from=build /src/conformance-cases /conformance-cases
+
+WORKDIR /conformance
 
 # Run as a plain user; nothing here needs root.
 RUN adduser -D -u 10001 runner
+RUN chown -R runner /conformance-cases
 USER runner
 
 ENTRYPOINT ["/usr/local/bin/conformance.test", "-test.v"]
