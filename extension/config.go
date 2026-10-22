@@ -189,10 +189,13 @@ func (e *Extension) serveConfig(ctx context.Context) error {
 			for ev := range ch {
 				if ev.Key != "" && !ev.Deleted {
 					n++
+					// One line per key at startup: this is the difference between "the
+					// watch delivered a snapshot" and "the watch is silently idle".
+					slog.Info("config key applied", "ext", e.cfg.ID, "key", ev.Key, "n", n)
 				}
 				e.applyConfigKV(ev)
 			}
-			slog.Info("config watch closed", "applied", n)
+			slog.Info("config watch closed", "ext", e.cfg.ID, "applied", n)
 		}()
 		e.subs = append(e.subs, kvWatchStopper{stop})
 	}
