@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -117,6 +118,11 @@ func newConfigStore() *ConfigStore {
 func (s *ConfigStore) Get(specs map[string]ConfigSpec, tenant, name, sessionName string) any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Which tenant is being asked for, and what is actually held. A mismatch here
+	// is invisible from every other vantage point: the snapshot was applied, the
+	// console shows the value, and the tool still reports it unset.
+	slog.Debug("config get", "tenant", tenant, "name", name,
+		"tenants_held", len(s.global), "hit", s.global[tenant] != nil)
 	if sessionName != "" {
 		if v, ok := s.session[tenant][sessionName][name]; ok {
 			return v
@@ -367,6 +373,7 @@ func (e *Extension) applyConfigKV(ev bus.KvEvent) {
 	// t.<tenant>.<extId>.<escapedSession>.<name> (session).
 	segs := strings.SplitN(ev.Key, ".", 4)
 	if len(segs) < 3 || segs[0] != "t" {
+		slog.Warn("config key shape not recognised", "key", ev.Key, "ext", e.cfg.ID)
 		return
 	}
 	tenant := segs[1]
@@ -415,6 +422,9 @@ func (e *Extension) applyConfigKV(ev bus.KvEvent) {
 			e.configStore.global[tenant] = map[string]any{}
 		}
 		e.configStore.global[tenant][parts[0]] = v
+		// Log what "global[tenant]" now holds for this knob: a stored value that the
+		// reader cannot find is otherwise a silent, unobservable mismatch.
+		slog.Info("config stored", "ext", e.cfg.ID, "tenant", tenant, "name", parts[0], "value", fmt.Sprintf("%v", v))
 	} else if len(parts) == 2 {
 		sess := protocol.UnescapeKVSegment(parts[0])
 		if e.configStore.session[tenant] == nil {
