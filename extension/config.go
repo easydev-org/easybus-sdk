@@ -425,7 +425,17 @@ func (e *Extension) applyConfigKV(ev bus.KvEvent) {
 		// verbatim, because a config value is ultimately a string.
 		var raw any
 		if json.Unmarshal([]byte(ev.Value), &raw) == nil {
-			v = raw
+			// Only a SCALAR is unwrapped. A JSON array or object is a structured
+			// knob whose declaration the extension parses itself (a `list` of
+			// sandboxes, a `servers` map) — handing it back as []any breaks the
+			// string-typed readers that expect the text, and they see "" and report
+			// the knob unset.
+			switch raw.(type) {
+			case []any, map[string]any:
+				v = ev.Value
+			default:
+				v = raw
+			}
 		} else {
 			v = ev.Value
 		}

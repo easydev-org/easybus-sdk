@@ -29,6 +29,11 @@ func TestApplyConfigKVBareValue(t *testing.T) {
 		{"json string", `"quoted-value"`, "quoted-value"},
 		{"envelope", `{"r":7,"v":"enveloped"}`, "enveloped"},
 		{"json number", `42`, float64(42)},
+		// A STRUCTURED knob must stay text. Extensions parse it themselves against
+		// their declaration (a list of sandboxes, a servers map); handing back
+		// []any makes the string-typed reader see "" and report the knob unset.
+		{"json array stays text", `[{"name":"local"}]`, `[{"name":"local"}]`},
+		{"json object stays text", `{"host":"x"}`, `{"host":"x"}`},
 	}
 
 	for _, c := range cases {
