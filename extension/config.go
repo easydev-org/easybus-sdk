@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -174,11 +175,24 @@ func (e *Extension) serveConfig(ctx context.Context) error {
 	if len(e.cfg.Config) == 0 {
 		return nil
 	}
-	if ch, stop, err := e.b.KvWatch(ctx, protocol.ConfigKVBucket, "t.*."+e.cfg.ID+".>"); err == nil {
+	// A failed KvWatch used to be swallowed entirely (`if ...; err == nil`), which
+	// made "the extension never receives config" indistinguishable from "there is no
+	// config". Say so.
+	pattern := "t.*." + e.cfg.ID + ".>"
+	ch, stop, werr := e.b.KvWatch(ctx, protocol.ConfigKVBucket, pattern)
+	if werr != nil {
+		slog.Warn("config watch failed; extension will start with no config",
+			"bucket", protocol.ConfigKVBucket, "pattern", pattern, "err", werr)
+	} else {
 		go func() {
+			n := 0
 			for ev := range ch {
+				if ev.Key != "" && !ev.Deleted {
+					n++
+				}
 				e.applyConfigKV(ev)
 			}
+			slog.Info("config watch closed", "applied", n)
 		}()
 		e.subs = append(e.subs, kvWatchStopper{stop})
 	}
