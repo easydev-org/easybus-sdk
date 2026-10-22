@@ -81,6 +81,15 @@ type ManifestConfig struct {
 	Type       string `yaml:"type"`
 	Kind       string `yaml:"kind"` // "value" (default) | "model"
 	Capability string `yaml:"capability"`
+	// Format narrows a Type=="string" knob: uri | host | path | email | duration |
+	// semver.
+	//
+	// It existed only on STRUCTURED sub-fields, so a top-level knob like
+	// `easyops-url` had no way to say what it was. The server was left guessing
+	// from the knob's NAME (a "-url" suffix), which works for the names this stack
+	// happens to use and silently stops working for the next one. Declaring it
+	// makes the check exact and lets a client pick the right input widgets.
+	Format string `yaml:"format"`
 	// EnumValues are the allowed choices when Type == "enum".
 	EnumValues   []string          `yaml:"enum_values"`
 	Default      any               `yaml:"default"`
@@ -252,6 +261,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 			Description:  c.Description,
 			Descriptions: c.Descriptions,
 			Type:         c.Type,
+			Format:       c.Format,
 			Kind:         c.Kind,
 			Capability:   c.Capability,
 			EnumValues:   c.EnumValues,

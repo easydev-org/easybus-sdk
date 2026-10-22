@@ -25,6 +25,10 @@ type ConfigSpec struct {
 	// fallback, same convention as tool descriptions.
 	Descriptions map[string]string
 	Type         string // string | number | boolean | enum | json
+	// Format narrows a Type=="string" knob: uri | host | path | email | duration |
+	// semver. Declaring it lets the agent validate exactly and the console render
+	// the right input; without it both have to infer intent from the knob's name.
+	Format string
 	// Kind distinguishes an ordinary knob ("value", default) from a model
 	// reference ("model") or a credential ("secret"). A model's value is a
 	// `provider_id/model_id` reference (a picker scoped to Capability); a

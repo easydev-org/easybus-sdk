@@ -870,7 +870,16 @@ type ExtensionConfigItem struct {
 	// two extensions declaring `sandboxes` silently shared a single value. The
 	// stored key is now (tenant, extId, namespace, name), so nothing crosses an
 	// extension boundary by accident.
-	Namespace     *string `protobuf:"bytes,14,opt,name=namespace,proto3,oneof" json:"namespace,omitempty"`
+	Namespace *string `protobuf:"bytes,14,opt,name=namespace,proto3,oneof" json:"namespace,omitempty"`
+	// format narrows a `string` knob: uri | host | path | email | duration |
+	// semver.
+	//
+	// It already existed on structured SUB-fields (ConfigFieldSchema), which is how
+	// a list item's `url` gets a URL input. A TOP-LEVEL knob had no equivalent, so
+	// `easyops-url` could only be described by its name — leaving the agent to
+	// guess what "looks like a URL" means, and leaving the console unable to render
+	// a URL field. Declaring it makes both exact.
+	Format        *string `protobuf:"bytes,15,opt,name=format,proto3,oneof" json:"format,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -999,6 +1008,13 @@ func (x *ExtensionConfigItem) GetMaxItems() int32 {
 func (x *ExtensionConfigItem) GetNamespace() string {
 	if x != nil && x.Namespace != nil {
 		return *x.Namespace
+	}
+	return ""
+}
+
+func (x *ExtensionConfigItem) GetFormat() string {
+	if x != nil && x.Format != nil {
+		return *x.Format
 	}
 	return ""
 }
@@ -2083,7 +2099,7 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\f_description\"B\n" +
 	"\x16ExtensionVariableValue\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\xc3\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\xeb\x05\n" +
 	"\x13ExtensionConfigItem\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x17\n" +
@@ -2102,7 +2118,8 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\titem_type\x18\v \x01(\tH\x03R\bitemType\x88\x01\x01\x12 \n" +
 	"\tmin_items\x18\f \x01(\x05H\x04R\bminItems\x88\x01\x01\x12 \n" +
 	"\tmax_items\x18\r \x01(\x05H\x05R\bmaxItems\x88\x01\x01\x12!\n" +
-	"\tnamespace\x18\x0e \x01(\tH\x06R\tnamespace\x88\x01\x01\x1a?\n" +
+	"\tnamespace\x18\x0e \x01(\tH\x06R\tnamespace\x88\x01\x01\x12\x1b\n" +
+	"\x06format\x18\x0f \x01(\tH\aR\x06format\x88\x01\x01\x1a?\n" +
 	"\x11DescriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\a\n" +
@@ -2116,7 +2133,8 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\n" +
 	"_max_itemsB\f\n" +
 	"\n" +
-	"_namespace\"\xf6\x01\n" +
+	"_namespaceB\t\n" +
+	"\a_format\"\xf6\x01\n" +
 	"\x12ExtensionNamespace\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
 	"\vdescription\x18\x02 \x01(\tH\x00R\vdescription\x88\x01\x01\x12T\n" +

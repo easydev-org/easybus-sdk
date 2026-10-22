@@ -312,6 +312,13 @@ func New(b bus.Bus, cfg Config) *Extension {
 				cap := spec.Capability
 				item.Capability = &cap
 			}
+			// Ship the declared format so the agent can validate the value exactly
+			// and the console can render the right input, instead of both inferring
+			// intent from the knob's name.
+			if spec.Format != "" {
+				f := spec.Format
+				item.Format = &f
+			}
 			if spec.Description != "" {
 				d := spec.Description
 				item.Description = &d
