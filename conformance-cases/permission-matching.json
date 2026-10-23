@@ -1,0 +1,79 @@
+{
+  "id": "permission-matching",
+  "why": "The grant-matching rules are the security boundary of every extension, and they are implemented four times (Go, TypeScript, Python, Rust). If they disagree, the same grant authorises different things depending on which language the extension happens to be written in — so the table is shared and every SDK must reproduce it exactly.",
+  "kind": "permission-matching",
+  "cases": [
+    {
+      "grant": { "repo": "agentdev/mrflow" },
+      "target": { "repo": "agentdev/mrflow" },
+      "want": true,
+      "why": "exact match"
+    },
+    {
+      "grant": { "repo": "agentdev/mrflow" },
+      "target": { "repo": "agentdev/other" },
+      "want": false,
+      "why": "different value"
+    },
+    {
+      "grant": { "repo": "agentdev/*" },
+      "target": { "repo": "agentdev/mrflow" },
+      "want": true,
+      "why": "trailing wildcard covers a prefix"
+    },
+    {
+      "grant": { "repo": "agentdev/*" },
+      "target": { "repo": "easydev-org/x" },
+      "want": false,
+      "why": "wildcard is anchored to its prefix"
+    },
+    {
+      "grant": { "repo": "*" },
+      "target": { "repo": "anything/at/all" },
+      "want": true,
+      "why": "a bare wildcard covers everything"
+    },
+    {
+      "grant": { "repo": "agentdev/*.go" },
+      "target": { "repo": "agentdev/main.go" },
+      "want": true,
+      "why": "wildcard with a suffix"
+    },
+    {
+      "grant": { "repo": "agentdev/*.go" },
+      "target": { "repo": "agentdev/main.md" },
+      "want": false,
+      "why": "suffix must match"
+    },
+    {
+      "grant": { "repo": "agentdev/*" },
+      "target": { "repo": "agentdev" },
+      "want": false,
+      "why": "a wildcard must not match the parent it was anchored to"
+    },
+    {
+      "grant": { "namespace": "dev", "service": "api" },
+      "target": { "namespace": "dev", "service": "api" },
+      "want": true,
+      "why": "every declared param matches"
+    },
+    {
+      "grant": { "namespace": "dev", "service": "api" },
+      "target": { "namespace": "dev", "service": "web" },
+      "want": false,
+      "why": "AND across declared params"
+    },
+    {
+      "grant": { "namespace": "dev", "service": "api" },
+      "target": { "namespace": "dev" },
+      "want": false,
+      "why": "a target missing a declared param is not covered"
+    },
+    {
+      "grant": { "repo": "agentdev/*" },
+      "target": { "repo": "agentdev/mrflow", "branch": "feature/x" },
+      "want": true,
+      "why": "target params the grant does not declare are not compared"
+    }
+  ]
+}
