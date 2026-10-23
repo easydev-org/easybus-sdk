@@ -1,0 +1,98 @@
+name: codegen
+
+# Regenerates the committed wire code when the contract changes, and opens a pull request
+# with the result.
+#
+# WHY A BOT. `gen/` is committed, so nothing at build time forces it to match
+# `proto/easybus/v1/protocol.proto`. Editing the proto and forgetting `buf generate` produces
+# code that compiles, passes every behavioural test, and silently drops fields: a message the
+# generated code does not know about is never serialised. There is no error to notice — the
+# feature just does not work for anyone using this package.
+#
+# WHY A PULL REQUEST rather than pushing to main: the generated diff is mechanical, but a
+# CONTRACT change is exactly what a human should look at. The PR shows both.
+#
+# WHY THIS LIVES IN THIS REPOSITORY (and the other three SDKs have their own): each package
+# is published independently and owns its generated code. A bot that reached across
+# repositories would need organisation-wide credentials and would make one repository's CI
+# the failure point for three others.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'proto/easybus/v1/protocol.proto'
+      - 'proto/buf.gen.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # One run per commit. Two racing runs would push competing branches for the same change.
+  group: codegen-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Plugin versions are installed explicitly rather than using `@latest`: a bot that
+      # silently picked up a new generator major would produce a large unrelated diff, and the
+      # reviewer would have no way to tell that apart from a real contract change.
+      - name: Install protoc plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.5
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate
+        run: |
+          set -euo pipefail
+          (cd proto && buf generate --template buf.gen.yaml)
+
+      - name: Show what changed
+        run: |
+          if git diff --quiet -- gen/; then
+            echo "generated code already matches the proto"
+          else
+            git --no-pager diff --stat -- gen/
+          fi
+
+      - name: Open a pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: codegen/protocol
+          delete-branch: true
+          commit-message: |
+            codegen: regenerate gen/ from protocol.proto
+
+            Produced by .github/workflows/codegen.yml — no hand edits.
+          title: 'codegen: regenerate from protocol.proto'
+          body: |
+            `protocol.proto` (or `buf.gen.yaml`) changed; this PR carries the regenerated code.
+
+            ### What to review
+            The **proto diff in the commit that triggered this run** — that is the real change.
+            The generated file is a consequence; if it looks wrong, the contract is wrong.
+
+            ### Why a stale `gen/` is dangerous
+            It compiles and passes every test. A field the generated code does not know about is
+            simply absent on the wire, so a capability can look present in a manifest and never
+            reach the other side. Nothing fails; the feature just does not work.
+          labels: |
+            codegen
+            automated
