@@ -307,6 +307,8 @@ message ExtensionTool {
   // JSON Schema describing tool input.
   google.protobuf.Struct input_schema = 4;
   repeated string required_config = 5;
+  // bot_probe: verifies the codegen workflow opens a PR
+  string bot_probe = 98;
   // namespace groups this tool with others that do the same kind of job
   // (pvc, build, storage, ...). The tool's NAME is unchanged — callers keep
   // invoking `ops-create-pvc`; this only lets a client group it in the UI.
