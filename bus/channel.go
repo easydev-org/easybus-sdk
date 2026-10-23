@@ -138,7 +138,15 @@ func (c *Channels) ConsumeChannels(ctx context.Context, queue string, handler fu
 		for {
 			msg, ok := sub.Next(ctx)
 			if !ok {
-				return
+				// Next() returns false for TWO different things: the context is done, and
+				// the pull simply timed out with nothing to deliver. Treating them alike
+				// would make an idle channel shut its consumer down for good — which is
+				// exactly what happened: the consumer exited two seconds after startup and
+				// every later message piled up unread in the stream.
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
 			env := msg.Envelope
 			// Derive everything from the SUBJECT, never from the payload: a publisher must

@@ -128,6 +128,59 @@ func TestChannelSurvivesConsumerRestart(t *testing.T) {
 
 // Publishers cannot reach another tenant, and a consumer only ever reads its own
 // subscription's tenant: the subject is the routing key and the caller never sets it.
+// A consumer that has been IDLE must still deliver later messages.
+//
+// The pull timeout reports "nothing right now" the same way it reports "finished": Next()
+// returns false for both. A loop that treats false as the end exits two seconds after
+// startup and every later message piles up unread — the failure is invisible because the
+// consumer still exists and looks healthy.
+func TestChannelConsumerSurvivesIdle(t *testing.T) {
+	url := os.Getenv("EASYBUS_NATS_URL")
+	if url == "" {
+		s, err := natsrun.Start(natsrun.Config{Storage: natsrun.Memory})
+		if err != nil {
+			t.Skipf("no nats-server: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Stop() })
+		url = s.URL()
+	}
+	b, err := Connect(url)
+	if err != nil {
+		t.Skipf("nats unavailable: %v", err)
+	}
+	defer b.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	ch := sdkbus.NewChannels(b)
+
+	got := make(chan sdkbus.ChannelMessage, 8)
+	stop, err := ch.ConsumeChannels(ctx, "chan-idle", func(m sdkbus.ChannelMessage) error {
+		got <- m
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	defer stop()
+
+	// Longer than the 2s pull timeout, so the consumer has certainly seen an empty fetch.
+	time.Sleep(5 * time.Second)
+
+	if err := ch.PublishChannel(ctx, "alice", "gitea", "tag.after-idle",
+		map[string]any{}, "gitea"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case m := <-got:
+		if m.Topic != "tag.after-idle" {
+			t.Errorf("topic = %q", m.Topic)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("a consumer that went idle stopped delivering new messages")
+	}
+}
+
 func TestChannelTenantIsolation(t *testing.T) {
 	url := os.Getenv("EASYBUS_NATS_URL")
 	if url == "" {

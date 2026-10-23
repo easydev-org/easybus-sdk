@@ -405,7 +405,15 @@ func (a *Agent) ConsumeMailbox(ctx context.Context, handler func(MailboxMessageR
 		for {
 			msg, ok := sub.Next(ctx)
 			if !ok {
-				return
+				// Next() reports "nothing right now" the same way it reports "the context
+				// is done": a pull that timed out with an empty stream. Returning here
+				// would end the consumer for good after the first quiet two seconds, and
+				// every later message would sit in the stream unread. Only a cancelled
+				// context ends the loop.
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
 			env := msg.Envelope
 			sessionName := ""
