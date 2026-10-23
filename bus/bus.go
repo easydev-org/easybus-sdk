@@ -26,6 +26,13 @@ type SubscribeOpts struct {
 
 type InboxConsumeOpts struct {
 	Subject string
+	// Durable names the consumer so it survives a restart. Empty derives a name from the
+	// subject, which is what per-session mailbox consumers want; a caller consuming a SHARED
+	// stream (channels) supplies its own so the name is independent of the subject.
+	Durable string
+	// Queue splits delivery across replicas. Without it every replica would receive every
+	// message, which is right for per-session consumers and wrong for a shared fan-in.
+	Queue string
 }
 
 type InboxPublishOpts struct {

@@ -18,11 +18,16 @@ import (
 )
 
 const (
-	streamMailbox  = "EASYBUS_MAILBOX"
-	streamEvents   = "EASYBUS_EVENTS"
-	streamDLQ      = "EASYBUS_DLQ"
-	inboxWildcard  = "easybus.*.mailbox.>"
-	eventsWildcard = "easybus.*.session.events.>"
+	streamMailbox = "EASYBUS_MAILBOX"
+	streamEvents  = "EASYBUS_EVENTS"
+	streamDLQ     = "EASYBUS_DLQ"
+	// streamChannels carries channel events. A stream is REQUIRED, not optional: a
+	// js.Publish to a subject no stream claims is not retained, and a core NATS subscriber
+	// never sees it either — the message simply goes nowhere, with no error at publish time.
+	streamChannels  = "EASYBUS_CHANNELS"
+	channelWildcard = "easybus.*.channel.>"
+	inboxWildcard   = "easybus.*.mailbox.>"
+	eventsWildcard  = "easybus.*.session.events.>"
 	// EASYBUS_EVENTS also carries session lifecycle + session-changed (matches the
 	// TS SDK). Omitting these made ensureStreams DOWNGRADE the stream to only
 	// events, dropping the agent's session.changed/lifecycle publishes
@@ -111,6 +116,10 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 		name     string
 		subjects []string
 	}{
+		// Channels first: this subject space is disjoint from the others, so ordering does
+		// not matter for correctness — but declaring it here is what makes channel events
+		// persist at all. Without a stream, js.Publish silently retains nothing.
+		{streamChannels, []string{channelWildcard}},
 		{streamMailbox, []string{inboxWildcard}},
 		{streamEvents, []string{eventsWildcard, lifecycleWildcard, changedWildcard}},
 		{streamDLQ, []string{dlqWildcard}},
@@ -465,13 +474,17 @@ func (b *Bus) InboxConsume(ctx context.Context, opts bus.InboxConsumeOpts) (bus.
 	// name across different subjects silently delivers nothing — derive a
 	// stable per-subject durable name instead.
 	durable := durableConsumer
-	if subject != inboxWildcard {
+	if opts.Durable != "" {
+		durable = opts.Durable
+	} else if subject != inboxWildcard {
 		durable = durableConsumer + "-" + protocol.SessionToken(subject)
 	}
-	sub, err := b.js.PullSubscribe(subject, durable,
-		nats.ManualAck(),
-		nats.AckExplicit(),
-	)
+	subOpts := []nats.SubOpt{nats.ManualAck(), nats.AckExplicit()}
+	// No queue group here: a durable PULL consumer already distributes its messages across
+	// whoever is pulling from it, so several replicas sharing one durable name split the
+	// stream without any extra configuration. InboxConsumeOpts.Queue is accepted for callers
+	// that want the intent recorded, but the split is the durable name's doing.
+	sub, err := b.js.PullSubscribe(subject, durable, subOpts...)
 	if err != nil {
 		return nil, err
 	}

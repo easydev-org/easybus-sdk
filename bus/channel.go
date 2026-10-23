@@ -117,22 +117,36 @@ type ChannelMessage struct {
 // enforced in the handler, which reads the tenant from the subject and only distributes to
 // that tenant's subscriptions.
 func (c *Channels) ConsumeChannels(ctx context.Context, queue string, handler func(ChannelMessage) error) (func(), error) {
-	sub, err := c.bus.Subscribe(ctx, protocol.ChChannelAll, SubscribeOpts{Queue: queue})
+	// A DURABLE pull consumer, not a core NATS subscription.
+	//
+	// Channel events are published through JetStream, and a core subscription does not see
+	// JetStream-published messages at all — they live in the stream until a consumer reads
+	// them. A core subscription here would look correct and deliver nothing.
+	//
+	// Durable plus a queue group: durable so a restart resumes where it stopped (a message
+	// published while the agent restarted is not lost), queue group so replicas split the
+	// work instead of each processing every message.
+	sub, err := c.bus.InboxConsume(ctx, InboxConsumeOpts{
+		Subject: protocol.ChChannelAll,
+		Durable: "channels-" + queue,
+		Queue:   queue,
+	})
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		defer sub.Close()
 		for {
-			env, ok := sub.Next(ctx)
+			msg, ok := sub.Next(ctx)
 			if !ok {
 				return
 			}
+			env := msg.Envelope
 			// Derive everything from the SUBJECT, never from the payload: a publisher must
 			// not be able to claim a different channel or tenant than the one it published
 			// on.
 			tenant, channel, topic, ok := protocol.ParseChannelSubject(env.Ch)
 			if !ok {
+				msg.Ack()
 				continue
 			}
 			var body channelPayload
@@ -142,10 +156,13 @@ func (c *Channels) ConsumeChannels(ctx context.Context, queue string, handler fu
 				Payload: body.Payload,
 				Source:  body.Source,
 			}); err != nil {
-				// A failed distribution must not kill the consumer: one bad event should
-				// not silence every channel for every tenant.
+				// A failed distribution is ACKED anyway: a channel event is informational,
+				// and redelivering a message no subscriber could accept would block the
+				// consumer for every other event. The failure is logged by the handler.
+				msg.Ack()
 				continue
 			}
+			msg.Ack()
 		}
 	}()
 	return func() { _ = sub.Close() }, nil
