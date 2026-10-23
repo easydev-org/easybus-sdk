@@ -644,7 +644,14 @@ func (b *Bus) KVPut(ctx context.Context, bucket, key, value string, ttlMs int64)
 // entries arrive first (IsUpdate=false), then live updates; the channel
 // closes when the cancel func runs or ctx ends.
 func (b *Bus) KvWatch(ctx context.Context, bucket, keys string) (<-chan bus.KvEvent, func(), error) {
-	kv, err := b.js.KeyValue(bucket)
+	// Create the bucket if it does not exist yet.
+	//
+	// A watcher is usually the FIRST thing to touch a bucket: an agent starts watching
+	// subscriptions before any session has been created and written one. Failing here with
+	// "bucket not found" meant the watch never started, the index stayed empty forever, and
+	// every later write went into a bucket nobody was reading — with only a single error log
+	// at boot to show for it.
+	kv, err := b.kvStore(bucket, 0)
 	if err != nil {
 		return nil, nil, err
 	}
