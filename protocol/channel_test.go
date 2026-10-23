@@ -55,12 +55,18 @@ func TestMatchSubject(t *testing.T) {
 // The channel subject carries the tenant, and the caller never supplies it: that is what
 // makes cross-tenant delivery structurally impossible.
 func TestChChannelIsTenantScoped(t *testing.T) {
-	got := ChChannel("alice", "gitea", "tag.v1")
+	got, err := ChChannel("alice", "gitea", "tag.v1")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
 	if got != "easybus.alice.channel.gitea.tag.v1" {
 		t.Fatalf("ChChannel = %q", got)
 	}
 	// Two tenants produce different subjects for the same channel and topic.
-	other := ChChannel("bob", "gitea", "tag.v1")
+	other, err := ChChannel("bob", "gitea", "tag.v1")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
 	if got == other {
 		t.Fatal("two tenants must not share a channel subject")
 	}

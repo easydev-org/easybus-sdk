@@ -1,0 +1,49 @@
+{
+  "id": "channel-subjects",
+  "why": "Building and parsing a channel subject happens four times. A builder that emits a different shape than the parser expects means published events are never routed — again with no error anywhere.",
+  "kind": "channel-subjects",
+  "cases": [
+    {
+      "build": { "tenant": "t1", "channel": "gitea", "topic": "tag.acme/app.v1" },
+      "want": "easybus.t1.channel.gitea.tag.acme/app.v1",
+      "why": "a topic may contain slashes and dots and is passed through unchanged"
+    },
+    {
+      "build": { "tenant": "t1", "channel": "gitea", "topic": "push" },
+      "want": "easybus.t1.channel.gitea.push",
+      "why": "a single-segment topic"
+    },
+    {
+      "parse": "easybus.t1.channel.gitea.tag.acme/app.v1",
+      "want": ["t1", "gitea", "tag.acme/app.v1"],
+      "why": "round trip: the FIRST dot after the channel ends it, the rest is the topic"
+    },
+    {
+      "parse": "easybus.t1.mailbox.sess-1",
+      "want": null,
+      "why": "a mailbox subject is not a channel subject"
+    },
+    {
+      "parse": "easybus.t1.channel.gitea",
+      "want": null,
+      "why": "a channel subject with no topic is malformed"
+    },
+    {
+      "parse": "easybus.channel.gitea.topic",
+      "want": null,
+      "why": "no tenant segment: refused rather than parsed with a guessed tenant"
+    },
+    {
+      "reject": { "tenant": "t1", "channel": "gitea*", "topic": "x" },
+      "why": "a wildcard in the CHANNEL would turn one publish into a broadcast"
+    },
+    {
+      "reject": { "tenant": "t1", "channel": "gitea", "topic": "tag.>" },
+      "why": "a wildcard in the TOPIC is the same problem"
+    },
+    {
+      "reject": { "tenant": "t1", "channel": "", "topic": "x" },
+      "why": "an empty channel is not a segment"
+    }
+  ]
+}

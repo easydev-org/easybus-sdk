@@ -1,6 +1,9 @@
 package protocol
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Channel subject layout.
 //
@@ -23,11 +26,35 @@ const ChannelKVBucket = "subs"
 
 // ChChannel builds the subject for one channel message.
 //
-// `channel` and `topic` are validated rather than escaped: a caller that tries to smuggle
-// a tenant segment or a wildcard into either is refused, because the subject is built from
-// them and a wildcard would turn a publish into a broadcast.
-func ChChannel(tenant, channel, topic string) string {
-	return TenantPrefix(tenant) + "channel." + channel + "." + topic
+// Channel and topic are VALIDATED, not escaped. A caller that smuggles a wildcard into either
+// would turn one publish into a broadcast — the extension meant to notify about one repository
+// would notify every subscriber. The other three SDKs have always rejected this; Go accepted it,
+// which is the divergence this signature fixes.
+func ChChannel(tenant, channel, topic string) (string, error) {
+	for _, v := range []string{channel, topic} {
+		if !isLiteralSegment(v) {
+			return "", fmt.Errorf("channel and topic must be literal subject segments: %q", v)
+		}
+	}
+	return TenantPrefix(tenant) + "channel." + channel + "." + topic, nil
+}
+
+// isLiteralSegment reports whether v can be a literal (non-wildcard) subject segment.
+func isLiteralSegment(v string) bool {
+	if v == "" || strings.HasPrefix(v, ".") || strings.HasSuffix(v, ".") {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.' || r == '_' || r == '-' || r == '/':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ChChannelAll matches every channel message in every tenant.

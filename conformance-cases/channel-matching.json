@@ -1,0 +1,23 @@
+{
+  "id": "channel-matching",
+  "why": "Channel subscription matching is implemented four times and is the difference between a session being woken and never hearing anything. A wrong `>` rule is silent: the subscription is accepted, no message ever arrives, and nothing logs an error. The `tag.> does NOT match tag` case is not hypothetical — it was wrong once and only a real broker revealed it.",
+  "kind": "channel-matching",
+  "cases": [
+    { "pattern": "tag.v1", "topic": "tag.v1", "want": true, "why": "an exact pattern matches" },
+    { "pattern": "tag.v1", "topic": "tag.v2", "want": false, "why": "a literal segment must equal" },
+    { "pattern": "tag.*", "topic": "tag.v1", "want": true, "why": "* covers exactly one segment" },
+    { "pattern": "tag.*", "topic": "tag.v1.2", "want": false, "why": "* does NOT cover two segments" },
+    { "pattern": "tag.*", "topic": "tag", "want": false, "why": "* needs a segment to consume" },
+    { "pattern": "tag.>", "topic": "tag.v1", "want": true, "why": "> covers one segment" },
+    { "pattern": "tag.>", "topic": "tag.v1.2.3", "want": true, "why": "> covers many segments" },
+    { "pattern": "tag.>", "topic": "tag", "want": false, "why": "> must consume AT LEAST one segment — verified against a real broker" },
+    { "pattern": ">", "topic": "anything.at.all", "want": true, "why": "a bare > matches everything" },
+    { "pattern": ">", "topic": "one", "want": true, "why": "a bare > matches one segment too" },
+    { "pattern": "gitea.tag.>", "topic": "gitea.tag.acme/app.v1", "want": true, "why": "wildcards combine with literals" },
+    { "pattern": "gitea.tag.>", "topic": "gitea.push.v1", "want": false, "why": "a literal must still match" },
+    { "pattern": "*.tag.>", "topic": "gitea.tag.v1", "want": true, "why": "* in the middle" },
+    { "pattern": "*.tag.>", "topic": "gitea.push.v1", "want": false, "why": "* does not excuse the rest" },
+    { "pattern": "", "topic": "anything", "want": false, "why": "an empty pattern matches nothing rather than everything" },
+    { "pattern": "tag.>", "topic": "", "want": false, "why": "an empty topic is not covered" }
+  ]
+}

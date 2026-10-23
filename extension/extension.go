@@ -662,7 +662,11 @@ func (e *Extension) PublishChannel(ctx context.Context, tenant, channel, topic s
 			}
 		}
 	}
-	return e.b.Publish(ctx, protocol.ChChannel(tenant, channel, topic),
+	subj, err := protocol.ChChannel(tenant, channel, topic)
+	if err != nil {
+		return err
+	}
+	return e.b.Publish(ctx, subj,
 		channelPayload{Payload: payload, Source: e.cfg.ID}, bus.PublishOpts{Tenant: tenant})
 }
 

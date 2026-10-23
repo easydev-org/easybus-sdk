@@ -1,0 +1,166 @@
+{
+  "cases": [
+    {
+      "args": {
+        "session": "sess-1",
+        "tenant": "t1"
+      },
+      "fn": "chMailbox",
+      "want": "easybus.t1.mailbox.q-Yz86R6J1gXTqvpFg2vNs",
+      "why": "A direct mailbox message for one session. The trailing segment is the SESSION TOKEN, not the name: a session name may contain characters a subject cannot carry, so both ends derive a token and must derive the SAME one."
+    },
+    {
+      "args": {
+        "ext": "gitea",
+        "tenant": "t1",
+        "tool": "mr-merge"
+      },
+      "fn": "chToolCall",
+      "want": "easybus.t1.tool.call.gitea.mr-merge",
+      "why": "A tool call addressed to one extension tool. Note the `call` segment — a reader that builds `.tool.<ext>.<name>` publishes to a subject nothing subscribes to."
+    },
+    {
+      "args": {
+        "callId": "call-9",
+        "tenant": "t1"
+      },
+      "fn": "chToolProgress",
+      "want": "easybus.t1.tool.progress.call-9",
+      "why": "Progress frames for one in-flight call, keyed by call id so a turn can subscribe before the first frame arrives."
+    },
+    {
+      "args": {
+        "ext": "gitea",
+        "name": "token",
+        "tenant": "t1"
+      },
+      "fn": "chVariable",
+      "want": "easybus.t1.var.gitea.token",
+      "why": "A lazily-resolved prompt variable, addressed by extension and name."
+    },
+    {
+      "args": {
+        "session": "sess-1",
+        "tenant": "t1"
+      },
+      "fn": "chSessionEvents",
+      "want": "easybus.t1.session.events.q-Yz86R6J1gXTqvpFg2vNs",
+      "why": "The durable event stream a reconnecting client replays. Keyed by session TOKEN, like the mailbox."
+    },
+    {
+      "args": {
+        "tenant": "t1"
+      },
+      "fn": "chSessionChanged",
+      "want": "easybus.t1.session.changed",
+      "why": "Session-list changes for a tenant. One subject per tenant, not per session."
+    },
+    {
+      "args": {
+        "ext": "gitea",
+        "tenant": "t1"
+      },
+      "fn": "chInterrupt",
+      "want": "easybus.t1.ctl.interrupt.gitea",
+      "why": "An interrupt aimed at one extension. Lives under `ctl.`, which a reader that assumes a flat layout will miss."
+    },
+    {
+      "args": {
+        "tenant": "t1"
+      },
+      "fn": "chInterruptAll",
+      "want": "easybus.t1.ctl.interrupt.>",
+      "why": "An interrupt aimed at every extension of a tenant."
+    },
+    {
+      "args": {
+        "kind": "created",
+        "tenant": "t1"
+      },
+      "fn": "chLifecycle",
+      "want": "easybus.t1.session.lifecycle.created",
+      "why": "A session lifecycle event, addressed by KIND so a subscriber picks the ones it cares about instead of filtering in code."
+    },
+    {
+      "args": {
+        "ext": "gitea",
+        "hook": "before",
+        "tenant": "t1"
+      },
+      "fn": "chHookCall",
+      "want": "easybus.t1.hook.call.gitea.before",
+      "why": "A call hook, addressed by extension AND hook name."
+    },
+    {
+      "args": {
+        "hook": "oncommit",
+        "tenant": "t1"
+      },
+      "fn": "chHookEvent",
+      "want": "easybus.t1.hook.event.oncommit",
+      "why": "An event hook: addressed by hook name ALONE, unlike a call hook. Asymmetric on purpose and easy to get wrong."
+    },
+    {
+      "args": {
+        "ext": "gitea",
+        "tenant": "t1"
+      },
+      "fn": "chConfig",
+      "want": "easybus.t1.config.gitea",
+      "why": "Config changes for one extension. No trailing wildcard here — the subscriber watches the extension's own subject."
+    },
+    {
+      "args": {
+        "channel": "gitea",
+        "tenant": "t1",
+        "topic": "tag.acme/app.v1"
+      },
+      "fn": "chChannel",
+      "want": "easybus.t1.channel.gitea.tag.acme/app.v1",
+      "why": "One channel message. The topic may contain slashes and dots and is passed through unchanged."
+    },
+    {
+      "args": {
+        "tenant": "t1"
+      },
+      "fn": "chFileGet",
+      "want": "easybus.t1.file.get",
+      "why": "A file read RPC."
+    },
+    {
+      "args": {
+        "tenant": "t1"
+      },
+      "fn": "chFileIngest",
+      "want": "easybus.t1.file.ingest",
+      "why": "A file ingest RPC."
+    },
+    {
+      "args": {
+        "subject": "easybus.t1.mailbox.sess-1"
+      },
+      "fn": "subjectTenant",
+      "want": "t1",
+      "why": "A consumer derives the tenant from the SUBJECT, never the payload: a publisher that lies in its payload must not reach another tenant."
+    },
+    {
+      "args": {
+        "subject": "not-easybus.t1.mailbox.s"
+      },
+      "fn": "subjectTenant",
+      "want": "",
+      "why": "A foreign subject yields NO tenant rather than a guessed one."
+    },
+    {
+      "args": {
+        "subject": "easybus.t1"
+      },
+      "fn": "subjectTenant",
+      "want": "",
+      "why": "A bare `easybus.<tenant>` prefix is not a subject with a tenant."
+    }
+  ],
+  "id": "protocol-subjects",
+  "kind": "protocol-subjects",
+  "why": "Every subject is built four times (Go, TypeScript, Python, Rust) and a wrong one fails silently: the message is published to a subject nobody subscribes to, or read from one nobody writes. Nothing errors — the feature just does not work. These are the exact strings, so a divergence in any language is a failing test rather than a missing message."
+}

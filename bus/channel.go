@@ -72,7 +72,7 @@ func (c *Channels) PublishChannel(ctx context.Context, tenant, channel, topic st
 	if err := validateChannelSubject(channel, topic); err != nil {
 		return err
 	}
-	subj := protocol.ChChannel(tenant, channel, topic)
+	subj, _ := protocol.ChChannel(tenant, channel, topic) // already validated above
 	// Plain Publish, not InboxPublish: a channel event does NOT need a per-message dedup id
 	// or a session column. Retention comes from the stream, and the consumer is the agent's
 	// single fan-out — see ConsumeChannels.

@@ -46,7 +46,10 @@ func TestParseChannelSubject(t *testing.T) {
 
 // Round trip: what ChChannel builds, ParseChannelSubject must read back.
 func TestChannelSubjectRoundTrip(t *testing.T) {
-	subj := ChChannel("alice", "gitea", "tag.agentdev/mrflow.v1.2.3")
+	subj, err := ChChannel("alice", "gitea", "tag.agentdev/mrflow.v1.2.3")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
 	tenant, channel, topic, ok := ParseChannelSubject(subj)
 	if !ok || tenant != "alice" || channel != "gitea" || topic != "tag.agentdev/mrflow.v1.2.3" {
 		t.Fatalf("round trip failed: subject=%q got=(%q,%q,%q,%v)", subj, tenant, channel, topic, ok)
