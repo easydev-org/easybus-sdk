@@ -378,6 +378,31 @@ message ExtensionManifest {
   // permissions declares what this extension can require of a caller. Tools name
   // these keys in `requires`.
   repeated PermissionDecl permissions = 11;
+  // channels declares the channels this extension PUBLISHES to.
+  //
+  // Declared, not inferred, so a client can show what an extension can tell it about
+  // ("this one reports repository tags") and offer a subscription without the user having
+  // to know the topic format.
+  repeated ExtensionChannel channels = 12;
+}
+
+// ExtensionChannel is one channel an extension publishes to.
+message ExtensionChannel {
+  // name is the channel segment, e.g. "gitea".
+  string name = 1;
+  string description = 2;
+  map<string, string> descriptions = 3;
+  // topics documents the subject patterns this extension emits, e.g.
+  // "tag.<owner>/<repo>.<tag>". Documentation only: the agent does not parse it.
+  repeated ChannelTopic topics = 4;
+}
+
+// ChannelTopic documents one kind of message within a channel.
+message ChannelTopic {
+  // pattern is the topic shape, with <placeholders>.
+  string pattern = 1;
+  string description = 2;
+  map<string, string> descriptions = 3;
 }
 
 message HookSpec {

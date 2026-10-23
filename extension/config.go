@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
@@ -112,6 +113,22 @@ func newConfigStore() *ConfigStore {
 		global:  map[string]map[string]any{},
 		session: map[string]map[string]map[string]any{},
 	}
+}
+
+// Tenants returns the tenants this process has received configuration for.
+//
+// Used by extensions that do background work per tenant (polling a forge, watching a
+// repository) and therefore need to know which tenants exist. A tenant with no configuration
+// yet is simply absent — the normal state before anyone has set it up.
+func (s *ConfigStore) Tenants() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.global))
+	for t := range s.global {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Get resolves session override > global set > declared default for a tenant.
@@ -268,6 +285,15 @@ var _ = json.Marshal // reserved
 // for a tenant.
 func (e *Extension) GetConfig(tenant, name, sessionName string) any {
 	return e.configStore.Get(e.cfg.Config, tenant, name, sessionName)
+}
+
+// Tenants returns the tenants this process has received configuration for.
+//
+// For extensions that do per-tenant background work (polling a forge, watching a
+// repository) and need to know which tenants exist. A tenant nobody has configured yet is
+// simply absent.
+func (e *Extension) Tenants() []string {
+	return e.configStore.Tenants()
 }
 
 // ---------------------------------------------------------------------------

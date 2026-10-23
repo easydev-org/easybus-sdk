@@ -92,6 +92,26 @@ type PermissionSpec struct {
 	ParamsFields []FieldSpec
 }
 
+// ChannelSpec declares one channel an extension publishes to.
+//
+// Topics are DOCUMENTATION: the agent never parses a topic pattern, it only forwards what
+// the extension publishes. They exist so a client can show a user what kinds of event a
+// channel carries ("this one reports repository tags") and suggest a subscription pattern.
+type ChannelSpec struct {
+	Name         string
+	Description  string
+	Descriptions map[string]string
+	Topics       []ChannelTopicSpec
+}
+
+// ChannelTopicSpec documents one kind of message within a channel.
+type ChannelTopicSpec struct {
+	// Pattern is the topic shape with <placeholders>, e.g. "tag.<owner>/<repo>.<tag>".
+	Pattern      string
+	Description  string
+	Descriptions map[string]string
+}
+
 // VariableSpec describes one template variable and its lazy resolver.
 type VariableSpec struct {
 	Description  string
@@ -120,6 +140,8 @@ type Config struct {
 	// set (including capabilities no current tool uses) and so the params shape lives in
 	// one place.
 	Permissions []PermissionSpec
+	// Channels declares the channels this extension publishes to.
+	Channels []ChannelSpec
 	// Namespaces declares this extension's groupings (pvc, build, storage, ...).
 	// Tools and config knobs reference them via their Namespace field; the ORDER
 	// here is what a client uses to lay the groups out.
@@ -415,6 +437,24 @@ func New(b bus.Bus, cfg Config) *Extension {
 			ParamsFields: fieldSchemas(p.ParamsFields),
 		})
 	}
+	// Publish the declared channels so a client can offer a subscription without knowing
+	// the topic format.
+	for _, c := range cfg.Channels {
+		topics := make([]*easybus.ChannelTopic, 0, len(c.Topics))
+		for _, t := range c.Topics {
+			topics = append(topics, &easybus.ChannelTopic{
+				Pattern:      t.Pattern,
+				Description:  t.Description,
+				Descriptions: t.Descriptions,
+			})
+		}
+		e.manifest.Channels = append(e.manifest.Channels, &easybus.ExtensionChannel{
+			Name:         c.Name,
+			Description:  c.Description,
+			Descriptions: c.Descriptions,
+			Topics:       topics,
+		})
+	}
 	if len(cfg.CallHooks) > 0 || len(cfg.EventHooks) > 0 || len(cfg.HookSchemas.Call) > 0 || len(cfg.HookSchemas.Event) > 0 {
 		h := &easybus.HookSpec{
 			Call:         cfg.CallHooks,
@@ -598,6 +638,41 @@ func (e *Extension) startPresence(ctx context.Context) {
 func (e *Extension) ReportProgress(ctx context.Context, tenant, callID string, progress *easybus.ToolProgress) error {
 	progress.CallId = callID
 	return e.b.Publish(ctx, protocol.ChToolProgress(tenant, callID), progress, bus.PublishOpts{Tenant: tenant})
+}
+
+// PublishChannel publishes an event to a channel.
+//
+// The tenant is the one this extension is running for — never a parameter — so an extension
+// cannot publish into another tenant's channels. `channel` and `topic` are validated as
+// literal subject segments: a wildcard would turn one publish into a broadcast.
+//
+// Callers should choose a topic a user can subscribe to meaningfully.
+// "tag.agentdev/mrflow.v1.2.3" lets a session follow one repository's tags; a flat "event"
+// would push the filtering into every subscriber's code.
+func (e *Extension) PublishChannel(ctx context.Context, tenant, channel, topic string, payload any) error {
+	for _, v := range []string{channel, topic} {
+		if v == "" {
+			return fmt.Errorf("channel and topic are required")
+		}
+		for _, r := range v {
+			ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+				r == '.' || r == '_' || r == '-' || r == '/'
+			if !ok {
+				return fmt.Errorf("channel and topic must be literal subject segments, %q is not", v)
+			}
+		}
+	}
+	return e.b.Publish(ctx, protocol.ChChannel(tenant, channel, topic),
+		channelPayload{Payload: payload, Source: e.cfg.ID}, bus.PublishOpts{Tenant: tenant})
+}
+
+// channelPayload mirrors the bus package's wire shape.
+//
+// Duplicated rather than shared because the extension package must not depend on the bus
+// package's internals; the shape is two fields and its JSON tags are the contract.
+type channelPayload struct {
+	Payload any    `json:"payload,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 func (e *Extension) serveDiscovery(ctx context.Context) error {

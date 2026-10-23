@@ -2041,7 +2041,13 @@ type ExtensionManifest struct {
 	Hooks      *HookSpec             `protobuf:"bytes,9,opt,name=hooks,proto3" json:"hooks,omitempty"`
 	// permissions declares what this extension can require of a caller. Tools name
 	// these keys in `requires`.
-	Permissions   []*PermissionDecl `protobuf:"bytes,11,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	Permissions []*PermissionDecl `protobuf:"bytes,11,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	// channels declares the channels this extension PUBLISHES to.
+	//
+	// Declared, not inferred, so a client can show what an extension can tell it about
+	// ("this one reports repository tags") and offer a subscription without the user having
+	// to know the topic format.
+	Channels      []*ExtensionChannel `protobuf:"bytes,12,rep,name=channels,proto3" json:"channels,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2153,6 +2159,147 @@ func (x *ExtensionManifest) GetPermissions() []*PermissionDecl {
 	return nil
 }
 
+func (x *ExtensionManifest) GetChannels() []*ExtensionChannel {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+// ExtensionChannel is one channel an extension publishes to.
+type ExtensionChannel struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the channel segment, e.g. "gitea".
+	Name         string            `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description  string            `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	Descriptions map[string]string `protobuf:"bytes,3,rep,name=descriptions,proto3" json:"descriptions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// topics documents the subject patterns this extension emits, e.g.
+	// "tag.<owner>/<repo>.<tag>". Documentation only: the agent does not parse it.
+	Topics        []*ChannelTopic `protobuf:"bytes,4,rep,name=topics,proto3" json:"topics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionChannel) Reset() {
+	*x = ExtensionChannel{}
+	mi := &file_easybus_v1_protocol_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionChannel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionChannel) ProtoMessage() {}
+
+func (x *ExtensionChannel) ProtoReflect() protoreflect.Message {
+	mi := &file_easybus_v1_protocol_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionChannel.ProtoReflect.Descriptor instead.
+func (*ExtensionChannel) Descriptor() ([]byte, []int) {
+	return file_easybus_v1_protocol_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ExtensionChannel) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ExtensionChannel) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ExtensionChannel) GetDescriptions() map[string]string {
+	if x != nil {
+		return x.Descriptions
+	}
+	return nil
+}
+
+func (x *ExtensionChannel) GetTopics() []*ChannelTopic {
+	if x != nil {
+		return x.Topics
+	}
+	return nil
+}
+
+// ChannelTopic documents one kind of message within a channel.
+type ChannelTopic struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// pattern is the topic shape, with <placeholders>.
+	Pattern       string            `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
+	Description   string            `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	Descriptions  map[string]string `protobuf:"bytes,3,rep,name=descriptions,proto3" json:"descriptions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChannelTopic) Reset() {
+	*x = ChannelTopic{}
+	mi := &file_easybus_v1_protocol_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChannelTopic) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChannelTopic) ProtoMessage() {}
+
+func (x *ChannelTopic) ProtoReflect() protoreflect.Message {
+	mi := &file_easybus_v1_protocol_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChannelTopic.ProtoReflect.Descriptor instead.
+func (*ChannelTopic) Descriptor() ([]byte, []int) {
+	return file_easybus_v1_protocol_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ChannelTopic) GetPattern() string {
+	if x != nil {
+		return x.Pattern
+	}
+	return ""
+}
+
+func (x *ChannelTopic) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ChannelTopic) GetDescriptions() map[string]string {
+	if x != nil {
+		return x.Descriptions
+	}
+	return nil
+}
+
 type HookSpec struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	Call          []string                    `protobuf:"bytes,1,rep,name=call,proto3" json:"call,omitempty"`
@@ -2165,7 +2312,7 @@ type HookSpec struct {
 
 func (x *HookSpec) Reset() {
 	*x = HookSpec{}
-	mi := &file_easybus_v1_protocol_proto_msgTypes[24]
+	mi := &file_easybus_v1_protocol_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2177,7 +2324,7 @@ func (x *HookSpec) String() string {
 func (*HookSpec) ProtoMessage() {}
 
 func (x *HookSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_easybus_v1_protocol_proto_msgTypes[24]
+	mi := &file_easybus_v1_protocol_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2190,7 +2337,7 @@ func (x *HookSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HookSpec.ProtoReflect.Descriptor instead.
 func (*HookSpec) Descriptor() ([]byte, []int) {
-	return file_easybus_v1_protocol_proto_rawDescGZIP(), []int{24}
+	return file_easybus_v1_protocol_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *HookSpec) GetCall() []string {
@@ -2439,7 +2586,7 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"J\n" +
 	"\x05Grant\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
-	"\x06params\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x06params\"\xf9\x03\n" +
+	"\x06params\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x06params\"\xb3\x04\n" +
 	"\x11ExtensionManifest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\"\n" +
@@ -2454,7 +2601,23 @@ const file_easybus_v1_protocol_proto_rawDesc = "" +
 	"namespaces\x12\x1c\n" +
 	"\tlifecycle\x18\b \x03(\tR\tlifecycle\x12*\n" +
 	"\x05hooks\x18\t \x01(\v2\x14.easybus.v1.HookSpecR\x05hooks\x12<\n" +
-	"\vpermissions\x18\v \x03(\v2\x1a.easybus.v1.PermissionDeclR\vpermissions\"\xfe\x02\n" +
+	"\vpermissions\x18\v \x03(\v2\x1a.easybus.v1.PermissionDeclR\vpermissions\x128\n" +
+	"\bchannels\x18\f \x03(\v2\x1c.easybus.v1.ExtensionChannelR\bchannels\"\x8f\x02\n" +
+	"\x10ExtensionChannel\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12R\n" +
+	"\fdescriptions\x18\x03 \x03(\v2..easybus.v1.ExtensionChannel.DescriptionsEntryR\fdescriptions\x120\n" +
+	"\x06topics\x18\x04 \x03(\v2\x18.easybus.v1.ChannelTopicR\x06topics\x1a?\n" +
+	"\x11DescriptionsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdb\x01\n" +
+	"\fChannelTopic\x12\x18\n" +
+	"\apattern\x18\x01 \x01(\tR\apattern\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12N\n" +
+	"\fdescriptions\x18\x03 \x03(\v2*.easybus.v1.ChannelTopic.DescriptionsEntryR\fdescriptions\x1a?\n" +
+	"\x11DescriptionsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfe\x02\n" +
 	"\bHookSpec\x12\x12\n" +
 	"\x04call\x18\x01 \x03(\tR\x04call\x12\x14\n" +
 	"\x05event\x18\x02 \x03(\tR\x05event\x12H\n" +
@@ -2488,7 +2651,7 @@ func file_easybus_v1_protocol_proto_rawDescGZIP() []byte {
 }
 
 var file_easybus_v1_protocol_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_easybus_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_easybus_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_easybus_v1_protocol_proto_goTypes = []any{
 	(Code)(0),                      // 0: easybus.v1.Code
 	(Envelope_Kind)(0),             // 1: easybus.v1.Envelope.Kind
@@ -2517,70 +2680,78 @@ var file_easybus_v1_protocol_proto_goTypes = []any{
 	(*PermissionDecl)(nil),         // 24: easybus.v1.PermissionDecl
 	(*Grant)(nil),                  // 25: easybus.v1.Grant
 	(*ExtensionManifest)(nil),      // 26: easybus.v1.ExtensionManifest
-	(*HookSpec)(nil),               // 27: easybus.v1.HookSpec
-	nil,                            // 28: easybus.v1.ExtensionVariable.DescriptionsEntry
-	nil,                            // 29: easybus.v1.ExtensionConfigItem.DescriptionsEntry
-	nil,                            // 30: easybus.v1.ExtensionNamespace.DescriptionsEntry
-	nil,                            // 31: easybus.v1.ConfigFieldSchema.DescriptionsEntry
-	nil,                            // 32: easybus.v1.ConfigSnapshot.GlobalEntry
-	nil,                            // 33: easybus.v1.ExtensionTool.DescriptionsEntry
-	nil,                            // 34: easybus.v1.PermissionDecl.DescriptionsEntry
-	nil,                            // 35: easybus.v1.HookSpec.CallSchemasEntry
-	nil,                            // 36: easybus.v1.HookSpec.EventSchemasEntry
-	(*structpb.Value)(nil),         // 37: google.protobuf.Value
-	(*structpb.Struct)(nil),        // 38: google.protobuf.Struct
+	(*ExtensionChannel)(nil),       // 27: easybus.v1.ExtensionChannel
+	(*ChannelTopic)(nil),           // 28: easybus.v1.ChannelTopic
+	(*HookSpec)(nil),               // 29: easybus.v1.HookSpec
+	nil,                            // 30: easybus.v1.ExtensionVariable.DescriptionsEntry
+	nil,                            // 31: easybus.v1.ExtensionConfigItem.DescriptionsEntry
+	nil,                            // 32: easybus.v1.ExtensionNamespace.DescriptionsEntry
+	nil,                            // 33: easybus.v1.ConfigFieldSchema.DescriptionsEntry
+	nil,                            // 34: easybus.v1.ConfigSnapshot.GlobalEntry
+	nil,                            // 35: easybus.v1.ExtensionTool.DescriptionsEntry
+	nil,                            // 36: easybus.v1.PermissionDecl.DescriptionsEntry
+	nil,                            // 37: easybus.v1.ExtensionChannel.DescriptionsEntry
+	nil,                            // 38: easybus.v1.ChannelTopic.DescriptionsEntry
+	nil,                            // 39: easybus.v1.HookSpec.CallSchemasEntry
+	nil,                            // 40: easybus.v1.HookSpec.EventSchemasEntry
+	(*structpb.Value)(nil),         // 41: google.protobuf.Value
+	(*structpb.Struct)(nil),        // 42: google.protobuf.Struct
 }
 var file_easybus_v1_protocol_proto_depIdxs = []int32{
 	1,  // 0: easybus.v1.Envelope.kind:type_name -> easybus.v1.Envelope.Kind
-	37, // 1: easybus.v1.Envelope.payload:type_name -> google.protobuf.Value
+	41, // 1: easybus.v1.Envelope.payload:type_name -> google.protobuf.Value
 	0,  // 2: easybus.v1.ErrorPayload.code:type_name -> easybus.v1.Code
-	38, // 3: easybus.v1.ToolCallEnvelope.arguments:type_name -> google.protobuf.Struct
+	42, // 3: easybus.v1.ToolCallEnvelope.arguments:type_name -> google.protobuf.Struct
 	25, // 4: easybus.v1.ToolCallEnvelope.grants:type_name -> easybus.v1.Grant
-	37, // 5: easybus.v1.ToolProgress.metadata:type_name -> google.protobuf.Value
-	37, // 6: easybus.v1.ToolResult.data:type_name -> google.protobuf.Value
-	37, // 7: easybus.v1.ToolResult.metadata:type_name -> google.protobuf.Value
+	41, // 5: easybus.v1.ToolProgress.metadata:type_name -> google.protobuf.Value
+	41, // 6: easybus.v1.ToolResult.data:type_name -> google.protobuf.Value
+	41, // 7: easybus.v1.ToolResult.metadata:type_name -> google.protobuf.Value
 	9,  // 8: easybus.v1.ToolResult.error:type_name -> easybus.v1.ToolError
 	5,  // 9: easybus.v1.ToolResult.object:type_name -> easybus.v1.ObjectRef
 	0,  // 10: easybus.v1.ToolError.code:type_name -> easybus.v1.Code
-	28, // 11: easybus.v1.ExtensionVariable.descriptions:type_name -> easybus.v1.ExtensionVariable.DescriptionsEntry
-	29, // 12: easybus.v1.ExtensionConfigItem.descriptions:type_name -> easybus.v1.ExtensionConfigItem.DescriptionsEntry
-	37, // 13: easybus.v1.ExtensionConfigItem.default:type_name -> google.protobuf.Value
+	30, // 11: easybus.v1.ExtensionVariable.descriptions:type_name -> easybus.v1.ExtensionVariable.DescriptionsEntry
+	31, // 12: easybus.v1.ExtensionConfigItem.descriptions:type_name -> easybus.v1.ExtensionConfigItem.DescriptionsEntry
+	41, // 13: easybus.v1.ExtensionConfigItem.default:type_name -> google.protobuf.Value
 	14, // 14: easybus.v1.ExtensionConfigItem.fields:type_name -> easybus.v1.ConfigFieldSchema
-	30, // 15: easybus.v1.ExtensionNamespace.descriptions:type_name -> easybus.v1.ExtensionNamespace.DescriptionsEntry
-	37, // 16: easybus.v1.ConfigFieldSchema.default:type_name -> google.protobuf.Value
-	31, // 17: easybus.v1.ConfigFieldSchema.descriptions:type_name -> easybus.v1.ConfigFieldSchema.DescriptionsEntry
+	32, // 15: easybus.v1.ExtensionNamespace.descriptions:type_name -> easybus.v1.ExtensionNamespace.DescriptionsEntry
+	41, // 16: easybus.v1.ConfigFieldSchema.default:type_name -> google.protobuf.Value
+	33, // 17: easybus.v1.ConfigFieldSchema.descriptions:type_name -> easybus.v1.ConfigFieldSchema.DescriptionsEntry
 	14, // 18: easybus.v1.ConfigFieldSchema.fields:type_name -> easybus.v1.ConfigFieldSchema
-	37, // 19: easybus.v1.ConfigSet.value:type_name -> google.protobuf.Value
-	32, // 20: easybus.v1.ConfigSnapshot.global:type_name -> easybus.v1.ConfigSnapshot.GlobalEntry
-	37, // 21: easybus.v1.ConfigSnapshot.sessions:type_name -> google.protobuf.Value
-	38, // 22: easybus.v1.HookCall.arguments:type_name -> google.protobuf.Struct
-	37, // 23: easybus.v1.HookEvent.payload:type_name -> google.protobuf.Value
-	37, // 24: easybus.v1.HookResponse.data:type_name -> google.protobuf.Value
+	41, // 19: easybus.v1.ConfigSet.value:type_name -> google.protobuf.Value
+	34, // 20: easybus.v1.ConfigSnapshot.global:type_name -> easybus.v1.ConfigSnapshot.GlobalEntry
+	41, // 21: easybus.v1.ConfigSnapshot.sessions:type_name -> google.protobuf.Value
+	42, // 22: easybus.v1.HookCall.arguments:type_name -> google.protobuf.Struct
+	41, // 23: easybus.v1.HookEvent.payload:type_name -> google.protobuf.Value
+	41, // 24: easybus.v1.HookResponse.data:type_name -> google.protobuf.Value
 	9,  // 25: easybus.v1.HookResponse.error:type_name -> easybus.v1.ToolError
 	2,  // 26: easybus.v1.LifecycleEvent.kind:type_name -> easybus.v1.LifecycleEvent.Kind
-	37, // 27: easybus.v1.LifecycleEvent.payload:type_name -> google.protobuf.Value
-	37, // 28: easybus.v1.MailboxMessage.payload:type_name -> google.protobuf.Value
-	33, // 29: easybus.v1.ExtensionTool.descriptions:type_name -> easybus.v1.ExtensionTool.DescriptionsEntry
-	38, // 30: easybus.v1.ExtensionTool.input_schema:type_name -> google.protobuf.Struct
-	34, // 31: easybus.v1.PermissionDecl.descriptions:type_name -> easybus.v1.PermissionDecl.DescriptionsEntry
+	41, // 27: easybus.v1.LifecycleEvent.payload:type_name -> google.protobuf.Value
+	41, // 28: easybus.v1.MailboxMessage.payload:type_name -> google.protobuf.Value
+	35, // 29: easybus.v1.ExtensionTool.descriptions:type_name -> easybus.v1.ExtensionTool.DescriptionsEntry
+	42, // 30: easybus.v1.ExtensionTool.input_schema:type_name -> google.protobuf.Struct
+	36, // 31: easybus.v1.PermissionDecl.descriptions:type_name -> easybus.v1.PermissionDecl.DescriptionsEntry
 	14, // 32: easybus.v1.PermissionDecl.params_fields:type_name -> easybus.v1.ConfigFieldSchema
-	38, // 33: easybus.v1.Grant.params:type_name -> google.protobuf.Struct
+	42, // 33: easybus.v1.Grant.params:type_name -> google.protobuf.Struct
 	12, // 34: easybus.v1.ExtensionManifest.config:type_name -> easybus.v1.ExtensionConfigItem
 	23, // 35: easybus.v1.ExtensionManifest.tools:type_name -> easybus.v1.ExtensionTool
 	10, // 36: easybus.v1.ExtensionManifest.prompt_variables:type_name -> easybus.v1.ExtensionVariable
 	13, // 37: easybus.v1.ExtensionManifest.namespaces:type_name -> easybus.v1.ExtensionNamespace
-	27, // 38: easybus.v1.ExtensionManifest.hooks:type_name -> easybus.v1.HookSpec
+	29, // 38: easybus.v1.ExtensionManifest.hooks:type_name -> easybus.v1.HookSpec
 	24, // 39: easybus.v1.ExtensionManifest.permissions:type_name -> easybus.v1.PermissionDecl
-	35, // 40: easybus.v1.HookSpec.call_schemas:type_name -> easybus.v1.HookSpec.CallSchemasEntry
-	36, // 41: easybus.v1.HookSpec.event_schemas:type_name -> easybus.v1.HookSpec.EventSchemasEntry
-	37, // 42: easybus.v1.ConfigSnapshot.GlobalEntry.value:type_name -> google.protobuf.Value
-	38, // 43: easybus.v1.HookSpec.CallSchemasEntry.value:type_name -> google.protobuf.Struct
-	38, // 44: easybus.v1.HookSpec.EventSchemasEntry.value:type_name -> google.protobuf.Struct
-	45, // [45:45] is the sub-list for method output_type
-	45, // [45:45] is the sub-list for method input_type
-	45, // [45:45] is the sub-list for extension type_name
-	45, // [45:45] is the sub-list for extension extendee
-	0,  // [0:45] is the sub-list for field type_name
+	27, // 40: easybus.v1.ExtensionManifest.channels:type_name -> easybus.v1.ExtensionChannel
+	37, // 41: easybus.v1.ExtensionChannel.descriptions:type_name -> easybus.v1.ExtensionChannel.DescriptionsEntry
+	28, // 42: easybus.v1.ExtensionChannel.topics:type_name -> easybus.v1.ChannelTopic
+	38, // 43: easybus.v1.ChannelTopic.descriptions:type_name -> easybus.v1.ChannelTopic.DescriptionsEntry
+	39, // 44: easybus.v1.HookSpec.call_schemas:type_name -> easybus.v1.HookSpec.CallSchemasEntry
+	40, // 45: easybus.v1.HookSpec.event_schemas:type_name -> easybus.v1.HookSpec.EventSchemasEntry
+	41, // 46: easybus.v1.ConfigSnapshot.GlobalEntry.value:type_name -> google.protobuf.Value
+	42, // 47: easybus.v1.HookSpec.CallSchemasEntry.value:type_name -> google.protobuf.Struct
+	42, // 48: easybus.v1.HookSpec.EventSchemasEntry.value:type_name -> google.protobuf.Struct
+	49, // [49:49] is the sub-list for method output_type
+	49, // [49:49] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_easybus_v1_protocol_proto_init() }
@@ -2607,7 +2778,7 @@ func file_easybus_v1_protocol_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_easybus_v1_protocol_proto_rawDesc), len(file_easybus_v1_protocol_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   34,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

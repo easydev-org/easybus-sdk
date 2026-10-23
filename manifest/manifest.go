@@ -36,6 +36,26 @@ type Manifest struct {
 	// Permissions declares what this extension can require of a caller. A tool names
 	// one of these keys in its `requires`.
 	Permissions []ManifestPermission `yaml:"permissions"`
+	// Channels declares the channels this extension publishes to, so a client can offer a
+	// subscription without the user having to know the topic format.
+	Channels []ManifestChannel `yaml:"channels"`
+}
+
+// ManifestChannel is one channel an extension publishes to.
+type ManifestChannel struct {
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	Descriptions map[string]string `yaml:"descriptions"`
+	// Topics documents the topic shapes this channel carries. Documentation only.
+	Topics []ManifestChannelTopic `yaml:"topics"`
+}
+
+// ManifestChannelTopic documents one kind of message within a channel.
+type ManifestChannelTopic struct {
+	// Pattern is the topic shape with <placeholders>, e.g. "tag.<owner>/<repo>.<tag>".
+	Pattern      string            `yaml:"pattern"`
+	Description  string            `yaml:"description"`
+	Descriptions map[string]string `yaml:"descriptions"`
 }
 
 // ManifestPermission declares one permission an extension can require.
@@ -280,6 +300,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		Config:         map[string]extension.ConfigSpec{},
 		Namespaces:     toNamespaceSpecs(m.Namespaces),
 		Permissions:    toPermissionSpecs(m.Permissions),
+		Channels:       toChannelSpecs(m.Channels),
 		Lifecycle:      m.Lifecycle,
 		OnCallHook:     b.OnCallHook,
 		OnEventHook:    b.OnEventHook,
@@ -348,6 +369,31 @@ func toPermissionSpecs(in []ManifestPermission) []extension.PermissionSpec {
 			Descriptions: p.Descriptions,
 			Risk:         p.Risk,
 			ParamsFields: toFieldSpecs(p.ParamFields),
+		})
+	}
+	return out
+}
+
+// toChannelSpecs maps declared channels onto the runtime shape.
+func toChannelSpecs(in []ManifestChannel) []extension.ChannelSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]extension.ChannelSpec, 0, len(in))
+	for _, c := range in {
+		topics := make([]extension.ChannelTopicSpec, 0, len(c.Topics))
+		for _, t := range c.Topics {
+			topics = append(topics, extension.ChannelTopicSpec{
+				Pattern:      t.Pattern,
+				Description:  t.Description,
+				Descriptions: t.Descriptions,
+			})
+		}
+		out = append(out, extension.ChannelSpec{
+			Name:         c.Name,
+			Description:  c.Description,
+			Descriptions: c.Descriptions,
+			Topics:       topics,
 		})
 	}
 	return out

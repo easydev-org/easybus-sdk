@@ -25,7 +25,11 @@ type (
 	// everything but the extension that defined them.
 	Grant = easybusv1.Grant
 	// PermissionDecl is one permission an extension can require of a caller.
-	PermissionDecl         = easybusv1.PermissionDecl
+	PermissionDecl = easybusv1.PermissionDecl
+	// ExtensionChannel is one channel an extension publishes to.
+	ExtensionChannel = easybusv1.ExtensionChannel
+	// ChannelTopic documents one kind of message within a channel.
+	ChannelTopic           = easybusv1.ChannelTopic
 	ExtensionVariable      = easybusv1.ExtensionVariable
 	ExtensionVariableValue = easybusv1.ExtensionVariableValue
 	ExtensionConfigItem    = easybusv1.ExtensionConfigItem
