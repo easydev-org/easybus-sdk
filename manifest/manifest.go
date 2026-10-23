@@ -33,6 +33,27 @@ type Manifest struct {
 	// and ordering); it becomes meaningful by being referenced from a tool or a
 	// config knob via `namespace:`.
 	Namespaces []ManifestNamespace `yaml:"namespaces"`
+	// Permissions declares what this extension can require of a caller. A tool names
+	// one of these keys in its `requires`.
+	Permissions []ManifestPermission `yaml:"permissions"`
+}
+
+// ManifestPermission declares one permission an extension can require.
+//
+// A permission is a (key, params) pair rather than a bare name: "merge pull requests in
+// THIS repository" is a different authorisation from "merge pull requests in that one",
+// so a session may hold several grants of the same key. The params shape is declared with
+// the SAME schema as config knobs, so a client renders a real form without a second type
+// system — and an empty ParamFields means the permission is a plain boolean.
+type ManifestPermission struct {
+	Key          string            `yaml:"key"`
+	Label        string            `yaml:"label"`
+	Descriptions map[string]string `yaml:"descriptions"`
+	// Risk is read | write | destructive. Presentation only: a client uses it to warn
+	// before granting. Enforcement is the extension's job, inside the tool.
+	Risk string `yaml:"risk"`
+	// ParamFields describes the params each grant carries (same schema as config).
+	ParamFields []ManifestField `yaml:"params"`
 }
 
 // ManifestNamespace describes one grouping of an extension's tools and config.
@@ -58,6 +79,8 @@ type ManifestTool struct {
 	// Purely organisational: the tool's NAME is unchanged (callers keep using
 	// `ops-create-pvc`), but a client can group it in the UI.
 	Namespace string `yaml:"namespace"`
+	// Requires names the permission keys a caller must hold to invoke this tool.
+	Requires []string `yaml:"requires"`
 }
 
 // ManifestVariable declares one prompt template variable.
@@ -228,6 +251,12 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		h.InputSchema = t.InputSchema
 		h.RequiredConfig = t.RequiredConfig
 		h.Namespace = t.Namespace
+		// The manifest is the SINGLE source for what a tool requires: a handler cannot
+		// quietly attach a requirement the manifest does not document, and the manifest
+		// entry is what a client reads to know what to ask the user for.
+		if len(t.Requires) > 0 {
+			h.Requires = t.Requires
+		}
 		tools[t.Name] = h
 	}
 
@@ -250,6 +279,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		Variables:      vars,
 		Config:         map[string]extension.ConfigSpec{},
 		Namespaces:     toNamespaceSpecs(m.Namespaces),
+		Permissions:    toPermissionSpecs(m.Permissions),
 		Lifecycle:      m.Lifecycle,
 		OnCallHook:     b.OnCallHook,
 		OnEventHook:    b.OnEventHook,
@@ -296,6 +326,28 @@ func toNamespaceSpecs(in []ManifestNamespace) []extension.NamespaceSpec {
 	for _, n := range in {
 		out = append(out, extension.NamespaceSpec{
 			Name: n.Name, Description: n.Description, Descriptions: n.Descriptions,
+		})
+	}
+	return out
+}
+
+// toPermissionSpecs maps declared permissions onto the runtime shape.
+//
+// ParamFields reuses toFieldSpecs, the same conversion the config knobs use: a client then
+// renders one form implementation for both, and there is no second schema dialect to keep
+// in step.
+func toPermissionSpecs(in []ManifestPermission) []extension.PermissionSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]extension.PermissionSpec, 0, len(in))
+	for _, p := range in {
+		out = append(out, extension.PermissionSpec{
+			Key:          p.Key,
+			Label:        p.Label,
+			Descriptions: p.Descriptions,
+			Risk:         p.Risk,
+			ParamsFields: toFieldSpecs(p.ParamFields),
 		})
 	}
 	return out

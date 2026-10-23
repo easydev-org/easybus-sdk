@@ -81,6 +81,14 @@ message ToolCallEnvelope {
   string call_id = 1;
   // Arbitrary key/value tool arguments.
   google.protobuf.Struct arguments = 2;
+  // grants are the caller's authorisations for this extension, so the extension can
+  // re-check coverage itself.
+  //
+  // This is NOT trust in the caller: the authoritative store is the agent's, and the
+  // extension re-decides on every call. It exists so the extension does not have to
+  // ask the agent who is calling and what they may do — the agent already knows, so
+  // it says so once per call.
+  repeated Grant grants = 3;
 }
 
 // ToolProgress is a progress update published during a long tool call.
@@ -303,6 +311,53 @@ message ExtensionTool {
   // (pvc, build, storage, ...). The tool's NAME is unchanged — callers keep
   // invoking `ops-create-pvc`; this only lets a client group it in the UI.
   optional string namespace = 6;
+  // requires names the permission KEYS a caller must hold to invoke this tool.
+  //
+  // Keys are opaque to the agent: it checks that a grant exists for each one and
+  // stops there. Whether a particular grant COVERS this call depends on the
+  // call's target (which repository? which sandbox?), and only the extension can
+  // work that out — so the matching happens there. See PermissionDecl.
+  repeated string requires = 7;
+}
+
+// PermissionDecl is one permission an extension can require.
+//
+// A permission is a (key, params) pair, NOT a bare name. `mr.merge` on one
+// repository is a different authorisation from `mr.merge` on another, so a
+// session may hold several grants of the same key with different params.
+//
+// The agent never interprets `params_fields`. It stores params as an opaque blob,
+// hands them back to the extension on each call, and lets the extension decide
+// whether they cover the call. That is what keeps this mechanism generic: the word
+// "repository" (or "sandbox", or "namespace") appears only in the extension.
+message PermissionDecl {
+  // key is the extension-scoped identifier, e.g. "mr.merge".
+  string key = 1;
+  // label is the human-readable name shown in a client.
+  string label = 2;
+  map<string, string> descriptions = 3;
+  // risk tells a client how loudly to warn: read | write | destructive.
+  //
+  // Presentation only — it does not affect enforcement. An extension that wants
+  // to refuse something dangerous must do so itself.
+  string risk = 4;
+  // params_fields describes the params a grant of this key carries, using the SAME
+  // ConfigFieldSchema as a structured config knob so a client renders one form
+  // implementation for both instead of a second type system.
+  //
+  // Empty means the permission is a plain boolean: held or not held.
+  repeated ConfigFieldSchema params_fields = 5;
+}
+
+// Grant is one authorisation handed to an extension at call time.
+//
+// It is deliberately minimal: a key plus the params the extension itself declared.
+// The extension re-decides coverage on every call, so a grant that no longer
+// matches costs nothing but a refusal.
+message Grant {
+  string key = 1;
+  // params is opaque to the agent. Its shape is whatever params_fields declared.
+  google.protobuf.Struct params = 2;
 }
 
 // ExtensionManifest is an extension's self-description.
@@ -320,6 +375,9 @@ message ExtensionManifest {
   repeated ExtensionNamespace namespaces = 10;
   repeated string lifecycle = 8;
   HookSpec hooks = 9;
+  // permissions declares what this extension can require of a caller. Tools name
+  // these keys in `requires`.
+  repeated PermissionDecl permissions = 11;
 }
 
 message HookSpec {

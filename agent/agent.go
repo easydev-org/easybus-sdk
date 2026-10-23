@@ -213,7 +213,19 @@ func (a *Agent) forgetPresenceKey(extID, key string) {
 // CallTool invokes a tool and returns its single terminal result. The tenant
 // and sessionName ride the envelope's first-class fields.
 func (a *Agent) CallTool(ctx context.Context, tenant, sessionName, extID, tool, callID string, args map[string]any) (ToolResult, error) {
-	reply, err := a.b.Request(ctx, protocol.ChToolCall(tenant, extID, tool), easybus.ToolCallEnvelope{CallId: callID, Arguments: easybus.Struct(args)}, bus.RequestOpts{SessionName: sessionName, Tenant: tenant})
+	return a.CallToolWithGrants(ctx, tenant, sessionName, extID, tool, callID, args, nil)
+}
+
+// CallToolWithGrants invokes a tool and tells the extension what the caller may do.
+//
+// The grants are the caller's authorisations for this extension. They are NOT a claim the
+// extension has to trust: it re-decides coverage on every call, and a grant that no longer
+// matches simply refuses. Passing them means the extension does not have to ask the agent
+// who is calling and what they hold — the agent already knows.
+//
+// A tool that declares no `requires` ignores them entirely, so passing nil is normal.
+func (a *Agent) CallToolWithGrants(ctx context.Context, tenant, sessionName, extID, tool, callID string, args map[string]any, grants []*easybus.Grant) (ToolResult, error) {
+	reply, err := a.b.Request(ctx, protocol.ChToolCall(tenant, extID, tool), easybus.ToolCallEnvelope{CallId: callID, Arguments: easybus.Struct(args), Grants: grants}, bus.RequestOpts{SessionName: sessionName, Tenant: tenant})
 	if err != nil {
 		return ToolResult{}, err
 	}

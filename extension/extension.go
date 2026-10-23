@@ -56,7 +56,15 @@ type ToolSpec struct {
 	// Namespace groups this tool with siblings that do the same kind of job
 	// (pvc, build, storage, ...). Organisational only: the tool keeps its name.
 	Namespace string
-	Execute   func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
+	// Requires names the permission keys a caller must hold to invoke this tool.
+	//
+	// Checked twice, on purpose. Here it is a COARSE check — the caller decides whether
+	// to refuse the call outright — and it can only ask "is the key present at all",
+	// because whether a grant covers THIS call depends on params only the tool
+	// understands. The tool therefore calls perm.Require itself with the target it
+	// resolves; that second check is the real boundary.
+	Requires []string
+	Execute  func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
 }
 
 // NamespaceSpec declares one grouping of an extension's tools and config.
@@ -64,6 +72,24 @@ type NamespaceSpec struct {
 	Name         string
 	Description  string
 	Descriptions map[string]string
+}
+
+// PermissionSpec declares one permission an extension can require.
+//
+// A permission is a (Key, params) pair rather than a bare name: "merge in this repository"
+// and "merge in that one" are different authorisations, so a holder may carry several
+// grants of the same Key. ParamsFields describes what each grant carries, using the SAME
+// schema as config knobs so a client renders a real form; empty means a boolean capability.
+type PermissionSpec struct {
+	Key          string
+	Label        string
+	Descriptions map[string]string
+	// Risk is read | write | destructive. Presentation only: a client uses it to warn
+	// before granting. Enforcement happens in the tool.
+	Risk string
+	// ParamsFields types the params of one grant, with the SAME schema as config knobs so
+	// a client renders one form implementation for both.
+	ParamsFields []FieldSpec
 }
 
 // VariableSpec describes one template variable and its lazy resolver.
@@ -87,6 +113,13 @@ type Config struct {
 	Tools     map[string]ToolSpec
 	Variables map[string]VariableSpec
 	Config    map[string]ConfigSpec
+	// Permissions declares what callers may be asked to hold before invoking this
+	// extension's tools. A tool names one of these keys in its Requires.
+	//
+	// Declared here rather than derived from the tools so a client can present the full
+	// set (including capabilities no current tool uses) and so the params shape lives in
+	// one place.
+	Permissions []PermissionSpec
 	// Namespaces declares this extension's groupings (pvc, build, storage, ...).
 	// Tools and config knobs reference them via their Namespace field; the ORDER
 	// here is what a client uses to lay the groups out.
@@ -274,6 +307,7 @@ func New(b bus.Bus, cfg Config) *Extension {
 				Descriptions:   spec.Descriptions,
 				InputSchema:    easybus.Struct(spec.InputSchema),
 				RequiredConfig: spec.RequiredConfig,
+				Requires:       spec.Requires,
 			}
 			if spec.Namespace != "" {
 				ns := spec.Namespace
@@ -368,6 +402,18 @@ func New(b bus.Bus, cfg Config) *Extension {
 			out.Description = &d
 		}
 		e.manifest.Namespaces = append(e.manifest.Namespaces, out)
+	}
+	// Publish the declared permissions. A client renders them (and the params form for
+	// each) without knowing anything about this extension, which is what keeps the
+	// permission UI generic.
+	for _, p := range cfg.Permissions {
+		e.manifest.Permissions = append(e.manifest.Permissions, &easybus.PermissionDecl{
+			Key:          p.Key,
+			Label:        p.Label,
+			Descriptions: p.Descriptions,
+			Risk:         p.Risk,
+			ParamsFields: fieldSchemas(p.ParamsFields),
+		})
 	}
 	if len(cfg.CallHooks) > 0 || len(cfg.EventHooks) > 0 || len(cfg.HookSchemas.Call) > 0 || len(cfg.HookSchemas.Event) > 0 {
 		h := &easybus.HookSpec{
@@ -630,6 +676,34 @@ func (e *Extension) handleToolCall(ctx context.Context, name string, spec ToolSp
 		e.trackInflight(tenant, sessionName, call.CallId, cancel)
 	}
 	res := &easybus.ToolResult{CallId: call.CallId, Tool: name}
+
+	// Attach the caller's grants so the tool can check coverage itself. A tool that
+	// declares no `requires` never looks.
+	callCtx = WithGrants(callCtx, call.Grants)
+
+	// COARSE check: is the key present at all?
+	//
+	// Deliberately not "does a grant cover this call": that needs the target, which only
+	// the tool can resolve from its arguments. This check exists to refuse early and with
+	// a clear message when the session holds no such permission whatsoever; the tool's own
+	// perm.Require is what actually enforces coverage.
+	var denied error
+	for _, key := range spec.Requires {
+		if len(GrantsFor(callCtx, key)) == 0 {
+			denied = &PermissionDenied{Key: key, Granted: nil}
+			break
+		}
+	}
+	if denied != nil {
+		e.untrackInflight(tenant, sessionName, call.CallId)
+		res.Error = &easybus.ToolError{
+			Code:    easybus.ToolResultErrorCodePermissionDenied,
+			Message: denied.Error(),
+		}
+		_ = e.b.Publish(context.Background(), replyTo, res, bus.PublishOpts{Tenant: tenant})
+		return
+	}
+
 	data, err := spec.Execute(callCtx, easybus.StructMap(call.Arguments), call.CallId, sessionName, tenant)
 	e.untrackInflight(tenant, sessionName, call.CallId)
 	if err != nil {

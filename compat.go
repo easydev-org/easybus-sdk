@@ -13,13 +13,19 @@ import (
 
 // Wire message types (aliases to the generated messages).
 type (
-	Envelope               = easybusv1.Envelope
-	ErrorPayload           = easybusv1.ErrorPayload
-	ObjectRef              = easybusv1.ObjectRef
-	ToolCallEnvelope       = easybusv1.ToolCallEnvelope
-	ToolProgress           = easybusv1.ToolProgress
-	ToolResult             = easybusv1.ToolResult
-	ToolError              = easybusv1.ToolError
+	Envelope         = easybusv1.Envelope
+	ErrorPayload     = easybusv1.ErrorPayload
+	ObjectRef        = easybusv1.ObjectRef
+	ToolCallEnvelope = easybusv1.ToolCallEnvelope
+	ToolProgress     = easybusv1.ToolProgress
+	ToolResult       = easybusv1.ToolResult
+	ToolError        = easybusv1.ToolError
+	// Grant is one authorisation handed to an extension at call time: a permission
+	// key plus params the extension itself declared. The params are opaque to
+	// everything but the extension that defined them.
+	Grant = easybusv1.Grant
+	// PermissionDecl is one permission an extension can require of a caller.
+	PermissionDecl         = easybusv1.PermissionDecl
 	ExtensionVariable      = easybusv1.ExtensionVariable
 	ExtensionVariableValue = easybusv1.ExtensionVariableValue
 	ExtensionConfigItem    = easybusv1.ExtensionConfigItem
