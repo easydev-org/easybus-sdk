@@ -794,9 +794,22 @@ func serveLateExt(t *testing.T, bus bus.Bus, wantGlobal map[string]any) *extensi
 	if err := ext.Serve(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got := ext.GetConfig(T, "poll-interval", "")
-	if got != wantGlobal["poll-interval"] {
-		t.Fatalf("snapshot apply: got %v want %v", got, wantGlobal["poll-interval"])
+	// Serve() STARTS the config watch; it does not wait for the snapshot to be applied. So
+	// the value can legitimately still be the declared default for a moment — asserting
+	// immediately made this test fail whenever the apply landed a few microseconds later,
+	// and the failure read as "got 30 want 7" (30 being the default), which looks like a
+	// broken snapshot rather than a race.
+	want := wantGlobal["poll-interval"]
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := ext.GetConfig(T, "poll-interval", ""); got == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("snapshot apply: got %v want %v (waited 3s)",
+				ext.GetConfig(T, "poll-interval", ""), want)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return ext
 }
