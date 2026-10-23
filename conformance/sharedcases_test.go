@@ -30,7 +30,7 @@ const (
 type sharedCase struct {
 	ID   string `json:"id"`
 	Why  string `json:"why"`
-	Kind string `json:"kind"` // "kv" | "constant"
+	Kind string `json:"kind"` // "kv" | "constant" | "permission-matching" | "channel-matching" | "channel-subjects" | "protocol-subjects"
 	KV   *struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -47,6 +47,10 @@ type sharedCase struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
 	} `json:"constant"`
+	// Cases carries the assertions for the pure-computation kinds. One field for all of them
+	// because the shapes differ (grant/target, pattern/topic, build/parse, fn/args) and a
+	// separate Go type per kind would duplicate what the JSON already declares.
+	Cases []map[string]any `json:"cases"`
 }
 
 // TestSharedCases runs every case in the shared directory.
@@ -63,6 +67,14 @@ func TestSharedCases(t *testing.T) {
 				runConstantCase(t, c)
 			case "kv":
 				runKVCase(t, c)
+			case "permission-matching":
+				runPermissionMatchingCase(t, c)
+			case "channel-matching":
+				runChannelMatchingCase(t, c)
+			case "channel-subjects":
+				runChannelSubjectsCase(t, c)
+			case "protocol-subjects":
+				runProtocolSubjectsCase(t, c)
 			default:
 				t.Fatalf("unknown case kind %q", c.Kind)
 			}
