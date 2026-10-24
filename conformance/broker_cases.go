@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -27,9 +28,17 @@ import (
 
 // casesDir is the shared conformance directory.
 //
-// Declared here rather than in a _test.go file because the runner is compiled into the package: a
-// test-only constant would not be visible to it.
-const casesDir = "../conformance-cases"
+// Resolved from THIS FILE's location rather than the process working directory. This runner is
+// called from other packages' tests (transport/nats), whose cwd is their own directory — so the
+// relative "../conformance-cases" that works for the conformance package's own tests silently
+// resolves nowhere there. A test that cannot find its cases must not pass.
+var casesDir = func() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("cannot resolve the conformance directory")
+	}
+	return filepath.Join(filepath.Dir(file), "..", "conformance-cases")
+}()
 
 type brokerFixture struct {
 	Ext struct {

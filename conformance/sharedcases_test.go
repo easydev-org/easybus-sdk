@@ -73,6 +73,12 @@ func TestSharedCases(t *testing.T) {
 				runChannelSubjectsCase(t, c)
 			case "protocol-subjects":
 				runProtocolSubjectsCase(t, c)
+			case "broker-fixture", "broker-cases":
+				// Not a single assertion, and not a broker case either: these are the INPUTS to
+				// the broker suite (the extension it builds and the calls it makes), which
+				// conformance/broker_cases.go reads directly. They live in this directory so
+				// every SDK reads the same bytes, but they have no runner of their own.
+				t.Skip("consumed by the broker-cases runner, not a standalone case")
 			default:
 				t.Fatalf("unknown case kind %q", c.Kind)
 			}
