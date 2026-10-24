@@ -21,8 +21,11 @@ import (
 // so an SDK that has not been refreshed fails here instead of quietly asserting an
 // older contract.
 
-// casesDir is declared in broker_cases.go (the runner is compiled into the package).
-const casesLock = "../conformance-cases/cases.lock"
+// casesDir is declared in broker_cases.go (the runner is compiled into the package), together
+// with the search that finds it in a source tree OR inside the pinned-environment image.
+// casesLock follows casesDir rather than a second hard-coded path: two paths for the same
+// directory is the same defect the search exists to avoid.
+var casesLock = filepath.Join(casesDir, "cases.lock")
 
 // sharedCase is one language-neutral assertion.
 type sharedCase struct {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,18 +27,36 @@ import (
 // Only the STATEMENTS are shared. How a case is expressed in a given language is not, and should
 // not be: Go has a context, TypeScript an AbortSignal, Python a ContextVar.
 
-// casesDir is the shared conformance directory.
+// casesDir is the directory holding the shared cases.
 //
-// Resolved from THIS FILE's location rather than the process working directory. This runner is
-// called from other packages' tests (transport/nats), whose cwd is their own directory — so the
-// relative "../conformance-cases" that works for the conformance package's own tests silently
-// resolves nowhere there. A test that cannot find its cases must not pass.
+// TWO constraints, and they pull in different directions:
+//
+//   - this runner is called from OTHER packages' tests (transport/nats), whose working directory
+//     is their own, so a bare "../conformance-cases" resolves nowhere there;
+//   - the pinned-environment job ships a compiled test binary plus the cases into an image, where
+//     the source tree does not exist at all — so a compile-time path (runtime.Caller) resolves
+//     nowhere there.
+//
+// Hence the search below: try the caller's directory, the working directory, and the container's
+// absolute location, and fail loudly with all the paths tried if none holds the files. A suite
+// that cannot find its cases must not pass.
 var casesDir = func() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("cannot resolve the conformance directory")
+	candidates := []string{}
+	if _, file, _, ok := runtime.Caller(0); ok {
+		// Tests running from their own package (the common case).
+		candidates = append(candidates, filepath.Join(filepath.Dir(file), "..", "conformance-cases"))
 	}
-	return filepath.Join(filepath.Dir(file), "..", "conformance-cases")
+	candidates = append(candidates,
+		"../conformance-cases", // working directory = conformance/ (the binary's own dir)
+		"conformance-cases",    // working directory = the repository root
+		"/conformance-cases",   // the pinned-environment image
+	)
+	for _, c := range candidates {
+		if _, err := os.Stat(filepath.Join(c, "broker-cases.json")); err == nil {
+			return c
+		}
+	}
+	panic("conformance cases not found; tried: " + strings.Join(candidates, ", "))
 }()
 
 type brokerFixture struct {
