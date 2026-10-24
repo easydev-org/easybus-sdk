@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	easybus "github.com/easydev-org/easybus-sdk"
@@ -498,18 +499,100 @@ func (b *Bus) InboxConsume(ctx context.Context, opts bus.InboxConsumeOpts) (bus.
 	if err != nil {
 		return nil, err
 	}
-	return &inboxSub{js: b.js, sub: sub}, nil
+	return &inboxSub{js: b.js, subject: subject, durable: durable, subOpts: subOpts, sub: sub}, nil
+}
+
+// fetch pulls one message, holding the lock so a concurrent recreate cannot swap the
+// subscription mid-Fetch.
+func (s *inboxSub) fetch() ([]*nats.Msg, error) {
+	s.mu.Lock()
+	sub := s.sub
+	s.mu.Unlock()
+	if sub == nil {
+		return nil, nats.ErrBadSubscription
+	}
+	return sub.Fetch(1, nats.MaxWait(2*time.Second))
+}
+
+// recreate re-opens the pull subscription after the consumer was removed underneath us.
+//
+// WHY this exists: a durable consumer can be deleted while we hold no connection — an operator
+// cleaning up, a stream reset, or the server reclaiming it. `Fetch` then fails forever with
+// "consumer not found", and every caller sees a dead consumer that it has no way to repair.
+func (s *inboxSub) recreate() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sub != nil {
+		_ = s.sub.Unsubscribe()
+		s.sub = nil
+	}
+	sub, err := s.js.PullSubscribe(s.subject, s.durable, s.subOpts...)
+	if err != nil {
+		return err
+	}
+	s.sub = sub
+	return nil
+}
+
+// isConsumerGone reports whether an error means the consumer no longer exists.
+//
+// Matched on the message because the nats.go client does not export a typed error for this: the
+// server answers 404 "consumer not found" and the client surfaces it as plain text.
+func isConsumerGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, nats.ErrConsumerNotFound) || errors.Is(err, nats.ErrBadSubscription) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "consumer not found") ||
+		strings.Contains(msg, "consumer deleted") ||
+		strings.Contains(msg, "no responders")
 }
 
 type inboxSub struct {
-	js  nats.JetStreamContext
+	js      nats.JetStreamContext
+	subject string
+	durable string
+	subOpts []nats.SubOpt
+
+	mu  sync.Mutex
 	sub *nats.Subscription
 }
 
 func (s *inboxSub) Next(ctx context.Context) (*bus.InboxMsg, bool) {
 	// PullSubscription requires Fetch(); NextMsgWithContext rejects pull subs.
-	msgs, err := s.sub.Fetch(1, nats.MaxWait(2*time.Second))
-	if err != nil || len(msgs) == 0 {
+	msgs, err := s.fetch()
+	if err != nil {
+		// An ERROR is not "nothing to read", and conflating them is what produced a consumer that
+		// spun millions of times per minute while reporting nothing: `Fetch` fails IMMEDIATELY
+		// when the consumer is gone, so the caller's idle branch re-fetched in a tight loop and
+		// the durable consumer stayed missing. Say which it is.
+		if isConsumerGone(err) {
+			log.Printf("[easybus] inbox consumer %q is gone (%v); recreating", s.durable, err)
+			if rerr := s.recreate(); rerr != nil {
+				log.Printf("[easybus] inbox consumer %q recreate failed: %v", s.durable, rerr)
+				// Back off rather than spin: the caller treats this as idle, and an immediate
+				// retry against a broken broker would burn the CPU for no progress.
+				select {
+				case <-ctx.Done():
+				case <-time.After(2 * time.Second):
+				}
+			}
+			return nil, false
+		}
+		if errors.Is(err, nats.ErrTimeout) {
+			return nil, false // genuinely idle: no message within the wait
+		}
+		log.Printf("[easybus] inbox fetch on %q: %v", s.subject, err)
+		select {
+		case <-ctx.Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+		return nil, false
+	}
+	if len(msgs) == 0 {
 		return nil, false
 	}
 	m := msgs[0]
@@ -536,7 +619,16 @@ func (s *inboxSub) Next(ctx context.Context) (*bus.InboxMsg, bool) {
 	return msg, true
 }
 
-func (s *inboxSub) Close() error { return s.sub.Unsubscribe() }
+func (s *inboxSub) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sub == nil {
+		return nil
+	}
+	err := s.sub.Unsubscribe()
+	s.sub = nil
+	return err
+}
 
 // InboxPurge deletes every retained message matching the channel filter.
 //
