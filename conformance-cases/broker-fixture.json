@@ -1,0 +1,93 @@
+{
+  "id": "broker-fixture",
+  "why": "The broker-backed conformance cases all drive the same extension: echo, add, boom, big, session, slow, hang, plus a few config knobs and a variable. Declaring it here means every SDK builds the SAME extension instead of four hand-written ones that can drift — which is exactly what happened with the config decoder, where all four had the same defect and every suite passed.",
+  "kind": "broker-fixture",
+  "ext": {
+    "id": "conf-ext",
+    "version": "1.0"
+  },
+  "tools": [
+    {
+      "name": "echo",
+      "description": "echo content",
+      "behaviour": "echo",
+      "why": "the workhorse: returns `echo:<msg>` so a caller can prove its arguments arrived"
+    },
+    {
+      "name": "add",
+      "description": "structured data result",
+      "behaviour": "add",
+      "why": "returns a structured `data` result rather than text"
+    },
+    {
+      "name": "boom",
+      "description": "always fails",
+      "behaviour": "boom",
+      "why": "returns a business error, so error mapping is exercised"
+    },
+    {
+      "name": "big",
+      "description": "returns more text than the content cap allows",
+      "behaviour": "big",
+      "why": "exceeds the tool-content cap, which must be refused rather than truncated"
+    },
+    {
+      "name": "session",
+      "description": "echoes the session name it was called with",
+      "behaviour": "session",
+      "why": "proves the agent threads the session name into the call"
+    },
+    {
+      "name": "slow",
+      "description": "sleeps before answering (request-timeout regression)",
+      "behaviour": "slow",
+      "ms": 1200,
+      "why": "answers after a delay, so a caller can prove request timeouts are bounded"
+    },
+    {
+      "name": "hang",
+      "description": "waits for ctx cancellation (interrupt semantics)",
+      "behaviour": "hang",
+      "ms": 30000,
+      "why": "waits until cancelled, which is how interrupt is tested"
+    }
+  ],
+  "variables": [
+    {
+      "name": "base-url",
+      "description": "the base url",
+      "value": "http://from-variable"
+    }
+  ],
+  "config": [
+    {
+      "name": "base-url",
+      "type": "string",
+      "description": "the base url"
+    },
+    {
+      "name": "poll-interval",
+      "type": "number",
+      "default": 30,
+      "description": "seconds between polls"
+    },
+    {
+      "name": "mode",
+      "type": "string",
+      "enum": ["fast", "slow"],
+      "description": "operating mode"
+    },
+    {
+      "name": "session-limit",
+      "type": "number",
+      "scope": "session",
+      "description": "per-session limit"
+    },
+    {
+      "name": "token",
+      "type": "string",
+      "kind": "secret",
+      "description": "a credential; never returned to a client"
+    }
+  ]
+}

@@ -19,7 +19,7 @@ func TestConformance(t *testing.T) {
 	// teardown and steal each other's deliveries). EASYBUS_NATS_URL opts into a
 	// shared external broker instead.
 	extURL := os.Getenv("EASYBUS_NATS_URL")
-	conformance.Run(t, func(t *testing.T) (bus.Bus, bus.Bus, func()) {
+	pair := func(t *testing.T) (bus.Bus, bus.Bus, func()) {
 		var stopServer func()
 		url := extURL
 		if url == "" {
@@ -45,5 +45,10 @@ func TestConformance(t *testing.T) {
 				stopServer()
 			}
 		}
-	})
+	}
+	conformance.Run(t, pair)
+	// The broker-backed cases declared in conformance-cases/. Registered after the hand-written
+	// suite so the familiar names appear first in the output, but they pin the SAME behaviours
+	// from a shared file that every SDK reads.
+	conformance.RunSharedBrokerCases(t, pair)
 }

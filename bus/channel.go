@@ -101,6 +101,11 @@ type ChannelMessage struct {
 	Topic   string
 	Payload any
 	Source  string
+	// UnparseableSubject is set INSTEAD of the fields above when the message's subject could
+	// not be read as a channel subject. The message is still acked (redelivering something we
+	// cannot address would block the consumer for everyone), but the handler is told, so the
+	// drop is observable rather than silent.
+	UnparseableSubject string
 }
 
 // ConsumeChannels subscribes once to EVERY channel of every tenant and hands each message
@@ -154,6 +159,13 @@ func (c *Channels) ConsumeChannels(ctx context.Context, queue string, handler fu
 			// on.
 			tenant, channel, topic, ok := protocol.ParseChannelSubject(env.Ch)
 			if !ok {
+				// Still acked (a message we cannot address must not be redelivered forever), but
+				// REPORTED to the handler first. Acking silently made "the subject did not parse"
+				// indistinguishable from "distribution succeeded": the consumer showed delivered
+				// and acked while nothing was routed, and no log existed anywhere.
+				_ = handler(ChannelMessage{
+					UnparseableSubject: env.Ch,
+				})
 				msg.Ack()
 				continue
 			}

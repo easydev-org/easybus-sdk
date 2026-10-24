@@ -1,0 +1,56 @@
+{
+  "id": "broker-cases",
+  "why": "The broker-backed behaviours every SDK must share: does a tool's text arrive, does structured data survive, is an error mapped, is an oversized result refused, does the session name reach the extension, does a variable resolve. Written as CALLS and EXPECTATIONS rather than as code, so four implementations cannot quietly disagree — the failure mode of the previous four hand-written suites.",
+  "kind": "broker-cases",
+  "fixture": "broker-fixture.json",
+  "cases": [
+    {
+      "id": "tool_content",
+      "call": { "tool": "echo", "session": "sess-1", "args": { "msg": "hi" } },
+      "expect": { "content": "echo:hi" },
+      "why": "a tool's text result reaches the caller unchanged"
+    },
+    {
+      "id": "tool_data",
+      "call": { "tool": "add", "session": "sess-1", "args": { "a": 2, "b": 3 } },
+      "expect": { "data": { "sum": 5 } },
+      "why": "structured data survives the trip as data, not stringified into text"
+    },
+    {
+      "id": "tool_error_mapping",
+      "call": { "tool": "boom", "session": "sess-1", "args": {} },
+      "expect": { "errorCode": "CODE_BUSINESS", "errorMessage": "nope" },
+      "why": "a business error keeps its code and message instead of becoming a generic failure"
+    },
+    {
+      "id": "tool_call_id_echo",
+      "call": { "tool": "echo", "session": "sess-1", "callId": "call-xyz", "args": { "msg": "1" } },
+      "expect": { "content": "echo:1", "callId": "call-xyz" },
+      "why": "the caller's call id is echoed: a turn subscribes for progress under the id it chose"
+    },
+    {
+      "id": "tool_session_name",
+      "call": { "tool": "session", "session": "my-session", "args": {} },
+      "expect": { "content": "session=my-session" },
+      "why": "the agent threads the session name into the extension call"
+    },
+    {
+      "id": "tool_content_over_limit",
+      "call": { "tool": "big", "session": "sess-1", "args": {} },
+      "expect": { "errorCode": "CODE_INVALID_ARGUMENT", "contentEmpty": true },
+      "why": "a result over the content cap is REFUSED, not truncated: truncation silently corrupts what the model reads"
+    },
+    {
+      "id": "tool_unknown",
+      "call": { "tool": "no-such-tool", "session": "sess-1", "args": {} },
+      "expect": { "errorCode": "UnknownTool" },
+      "why": "an unknown tool fails loudly rather than hanging until a timeout"
+    },
+    {
+      "id": "variable",
+      "resolveVariable": { "provider": "conf-ext", "name": "base-url", "session": "sess-1" },
+      "expect": { "value": "http://from-variable", "ok": true },
+      "why": "a prompt variable resolves through the extension, not from local config"
+    }
+  ]
+}

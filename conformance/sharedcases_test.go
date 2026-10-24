@@ -21,10 +21,8 @@ import (
 // so an SDK that has not been refreshed fails here instead of quietly asserting an
 // older contract.
 
-const (
-	casesDir  = "../conformance-cases"
-	casesLock = "../conformance-cases/cases.lock"
-)
+// casesDir is declared in broker_cases.go (the runner is compiled into the package).
+const casesLock = "../conformance-cases/cases.lock"
 
 // sharedCase is one language-neutral assertion.
 type sharedCase struct {
