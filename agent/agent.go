@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -402,6 +403,11 @@ func (a *Agent) ConsumeMailbox(ctx context.Context, handler func(MailboxMessageR
 		nakMu.Unlock()
 	}
 	go func() {
+		// Consecutive idle pulls. Logged periodically rather than per call: the loop is EXPECTED
+		// to idle (that is why a timed-out Fetch is not treated as shutdown), but a consumer that
+		// idles for hours while the stream is growing is the signature of a broken pull — and that
+		// is invisible without saying so.
+		idle := 0
 		for {
 			msg, ok := sub.Next(ctx)
 			if !ok {
@@ -411,10 +417,16 @@ func (a *Agent) ConsumeMailbox(ctx context.Context, handler func(MailboxMessageR
 				// every later message would sit in the stream unread. Only a cancelled
 				// context ends the loop.
 				if ctx.Err() != nil {
+					log.Printf("[easybus] mailbox consumer stopping: context done")
 					return
+				}
+				idle++
+				if idle%300 == 0 { // roughly every ten minutes at a 2s Fetch timeout
+					log.Printf("[easybus] mailbox consumer idle: %d consecutive empty pulls", idle)
 				}
 				continue
 			}
+			idle = 0
 			env := msg.Envelope
 			sessionName := ""
 			if env.SessionName != nil {

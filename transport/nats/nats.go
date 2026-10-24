@@ -479,7 +479,17 @@ func (b *Bus) InboxConsume(ctx context.Context, opts bus.InboxConsumeOpts) (bus.
 	} else if subject != inboxWildcard {
 		durable = durableConsumer + "-" + protocol.SessionToken(subject)
 	}
-	subOpts := []nats.SubOpt{nats.ManualAck(), nats.AckExplicit()}
+	// PullSubscribe already carries the durable NAME (it is its second argument), so it must not
+	// be supplied again as an option: nats.go rejects "option Durable set more than once".
+	//
+	// InactiveThreshold IS worth stating. Without it the server default applies, and a consumer
+	// that is meant to outlive a quiet period can be reclaimed — which is indistinguishable, from
+	// `consumers_info` a minute later, from the consumer never having been created.
+	subOpts := []nats.SubOpt{
+		nats.ManualAck(),
+		nats.AckExplicit(),
+		nats.InactiveThreshold(24 * time.Hour),
+	}
 	// No queue group here: a durable PULL consumer already distributes its messages across
 	// whoever is pulling from it, so several replicas sharing one durable name split the
 	// stream without any extra configuration. InboxConsumeOpts.Queue is accepted for callers
