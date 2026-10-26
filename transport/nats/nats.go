@@ -944,8 +944,20 @@ func (b *Bus) KVDelete(ctx context.Context, bucket, key string) error {
 	return kv.Delete(key)
 }
 
-// Replay returns the retained envelopes for a channel (JetStream stream
-// contents, oldest first). Backs session-events replay.
+// replayMaxMessages caps one Replay call.
+//
+// The stream is retained for 24h, so an uncapped replay returns "whatever the busiest day
+// produced" — a number nobody chose, allocated in one slice, once per WatchSession connect. 2000
+// covers a reconnect generously (a long turn emits a few hundred frames) while keeping the worst
+// case at a few hundred KB instead of tens of MB.
+const replayMaxMessages = 2000
+
+// Replay returns the most recent retained envelopes for a channel (oldest first within the
+// window). Backs session-events replay.
+//
+// CAPPED at replayMaxMessages, keeping the NEWEST. Truncating from the front is the only useful
+// direction: a reconnecting client needs the frames just before it lost the connection, not the
+// start of a day-old backlog.
 func (b *Bus) Replay(ctx context.Context, ch string) ([]*easybus.Envelope, error) {
 	out := []*easybus.Envelope{}
 	// Find the stream covering this subject.
@@ -970,6 +982,7 @@ func (b *Bus) Replay(ctx context.Context, ch string) ([]*easybus.Envelope, error
 			return nil, err
 		}
 		defer sub.Unsubscribe()
+		// Keep only the newest window: append everything, then trim from the front.
 		for {
 			m, err := sub.NextMsg(500 * time.Millisecond)
 			if err != nil {
@@ -980,6 +993,11 @@ func (b *Bus) Replay(ctx context.Context, ch string) ([]*easybus.Envelope, error
 				continue
 			}
 			out = append(out, env)
+			// Trim as we go rather than at the end: a 24h backlog on a busy day is exactly the
+			// case this cap exists for, and building the full slice first would defeat it.
+			if len(out) > replayMaxMessages {
+				out = out[len(out)-replayMaxMessages:]
+			}
 		}
 		break
 	}
