@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	easybus "github.com/easydev-org/easybus-sdk"
@@ -246,6 +247,13 @@ type Extension struct {
 	b        bus.Bus
 	cfg      Config
 	manifest easybus.ExtensionManifest
+	// serveOnce makes Serve a one-shot operation.
+	//
+	// Every subscription Serve installs is a JetStream consumer that lives as long as the process.
+	// Re-entering Serve doubles them, and a doubled consumer count is indistinguishable from a
+	// legitimate subscription when you inspect the stream — which is why the leak in one
+	// deployment had no single line to blame.
+	serveOnce atomic.Bool
 	// subsMu guards subs. Serve() installs subscriptions from several goroutines
 	// (one per channel family) while Close() may run at any time, so the slice is
 	// read and appended concurrently. -race caught exactly that on CI:
@@ -478,6 +486,18 @@ func (e *Extension) Manifest() *easybus.ExtensionManifest { return &e.manifest }
 
 // Serve registers discovery/tool/variable/hook channels and blocks until ctx done.
 func (e *Extension) Serve(ctx context.Context) error {
+	// Guard against a SECOND Serve on the same Extension.
+	//
+	// Serve opens one JetStream consumer per subscription it installs (config watch, discovery,
+	// tools, hooks). Calling it twice therefore doubles the consumer count for the life of the
+	// process, and a deployment that ended up with thousands of them had no single line to blame —
+	// each one looked like a legitimate subscription.
+	//
+	// Refusing loudly is the point: a caller that wants to restart should build a new Extension,
+	// not re-enter this one.
+	if !e.serveOnce.CompareAndSwap(false, true) {
+		return fmt.Errorf("extension %q: Serve called twice", e.cfg.ID)
+	}
 	e.startPresence(ctx)
 	if err := e.serveDiscovery(ctx); err != nil {
 		return err
