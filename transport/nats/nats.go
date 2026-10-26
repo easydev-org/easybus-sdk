@@ -58,6 +58,13 @@ var _ bus.Bus = (*Bus)(nil)
 type Options struct {
 	// MaxAge bounds stream retention. Zero means the default (24h).
 	MaxAge time.Duration
+	// MaxMsgs bounds how MANY messages a stream retains, independent of MaxAge.
+	//
+	// MaxAge alone bounds a stream by TIME, so its ceiling is whatever the busiest day produced —
+	// a number nobody chose. A count cap makes the worst case explicit. Zero means the default
+	// (100k for the log streams); the mailbox is exempt, because a message dropped there is a
+	// prompt that never runs.
+	MaxMsgs int64
 	// Replicas sets the JetStream replica count at stream creation.
 	// Zero means the server default (1). Cannot change after creation.
 	Replicas int
@@ -113,22 +120,38 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 	if maxAge == 0 {
 		maxAge = 24 * time.Hour
 	}
+	maxMsgs := opts.MaxMsgs
+	if maxMsgs == 0 {
+		// A COUNT cap in addition to the time cap.
+		//
+		// MaxAge alone is bounded by TIME, which means the ceiling is whatever the busiest 24 hours
+		// produced — a number nobody chose and that grows with traffic. Replay reads a whole
+		// subject's window into memory in one slice with no cap of its own, so an unbounded stream
+		// is an unbounded per-request allocation. This is the backstop that makes the worst case
+		// finite rather than "depends how busy yesterday was".
+		maxMsgs = 100_000
+	}
 	specs := []struct {
 		name     string
 		subjects []string
+		maxMsgs  int64
 	}{
 		// Channels first: this subject space is disjoint from the others, so ordering does
 		// not matter for correctness — but declaring it here is what makes channel events
 		// persist at all. Without a stream, js.Publish silently retains nothing.
-		{streamChannels, []string{channelWildcard}},
-		{streamMailbox, []string{inboxWildcard}},
-		{streamEvents, []string{eventsWildcard, lifecycleWildcard, changedWildcard}},
-		{streamDLQ, []string{dlqWildcard}},
+		//
+		// The MAILBOX is different from the rest and gets no count cap: it is a work queue, not a
+		// log. A message that is dropped because the stream hit a limit is a prompt that never
+		// runs — the one thing here that must not be lost.
+		{streamChannels, []string{channelWildcard}, maxMsgs},
+		{streamMailbox, []string{inboxWildcard}, -1},
+		{streamEvents, []string{eventsWildcard, lifecycleWildcard, changedWildcard}, maxMsgs},
+		{streamDLQ, []string{dlqWildcard}, 10_000},
 	}
 	for _, s := range specs {
 		info, err := js.StreamInfo(s.name)
 		if err != nil {
-			cfg := &nats.StreamConfig{Name: s.name, Subjects: s.subjects, MaxAge: maxAge}
+			cfg := &nats.StreamConfig{Name: s.name, Subjects: s.subjects, MaxAge: maxAge, MaxMsgs: s.maxMsgs}
 			if opts.Replicas > 0 {
 				cfg.Replicas = opts.Replicas
 			}
@@ -137,11 +160,30 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 			}
 			continue
 		}
-		if !sameSubjects(info.Config.Subjects, s.subjects) {
-			cfg := info.Config
+		// Reconcile the LIMITS too, not just the subjects.
+		//
+		// A stream that already exists keeps whatever it was created with. That is how a
+		// deployment migrated from the TypeScript SDK kept `max_age=0` — an unbounded stream the
+		// Go code would never have created, and never corrected either, because only the subject
+		// list was compared.
+		cfg := info.Config
+		changed := false
+		if !sameSubjects(cfg.Subjects, s.subjects) {
 			cfg.Subjects = s.subjects
+			changed = true
+		}
+		if cfg.MaxAge != maxAge {
+			cfg.MaxAge = maxAge
+			changed = true
+		}
+		// -1 means "no cap": leave whatever is there alone rather than imposing one.
+		if s.maxMsgs > 0 && cfg.MaxMsgs != s.maxMsgs {
+			cfg.MaxMsgs = s.maxMsgs
+			changed = true
+		}
+		if changed {
 			if _, uerr := js.UpdateStream(&cfg); uerr != nil {
-				return fmt.Errorf("reconcile stream %s subjects: %w", s.name, uerr)
+				return fmt.Errorf("reconcile stream %s: %w", s.name, uerr)
 			}
 		}
 	}
@@ -728,7 +770,14 @@ func (b *Bus) KVCreate(ctx context.Context, bucket, key, value string, ttlMs int
 	}
 	rev, err := kv.Create(key, []byte(value))
 	if err != nil {
-		return 0, nil
+		// "Key already exists" is the normal LOSING side of a claim race: the caller reads rev 0 as
+		// "somebody else has it" and backs off. Every OTHER error is reported — swallowing them
+		// made a broken bucket indistinguishable from a lost race, so a replica that could not
+		// talk to the broker believed another replica owned the session and never ran the turn.
+		if errors.Is(err, nats.ErrKeyExists) {
+			return 0, nil
+		}
+		return 0, err
 	}
 	return int64(rev), nil
 }
@@ -741,6 +790,27 @@ func (b *Bus) KVPut(ctx context.Context, bucket, key, value string, ttlMs int64)
 	_, err = kv.Put(key, []byte(value))
 	return err
 }
+
+// consumerSet lists the consumer names on a bucket's stream.
+func (b *Bus) consumerSet(bucket string) map[string]bool {
+	out := map[string]bool{}
+	for ci := range b.js.Consumers("KV_" + bucket) {
+		if ci == nil {
+			continue
+		}
+		out[ci.Name] = true
+	}
+	return out
+}
+
+// watchMu serialises watch creation.
+//
+// The diff used to identify "the consumer this watch created" is only sound if no OTHER watch
+// starts in between: two opens racing would each record the other's consumer as new, and the
+// second stop would then delete a live watch's consumer. Holding one lock across create-and-record
+// makes the diff exact. The window is a single KUpsert round trip, so the contention is negligible
+// next to what a leaked consumer costs.
+var watchMu sync.Mutex
 
 // KvWatch streams bucket entries matching keys (NATS wildcard). Snapshot
 // entries arrive first (IsUpdate=false), then live updates; the channel
@@ -757,12 +827,45 @@ func (b *Bus) KvWatch(ctx context.Context, bucket, keys string) (<-chan bus.KvEv
 	if err != nil {
 		return nil, nil, err
 	}
+	// Created under the lock so the consumer diff below names exactly one consumer.
+	watchMu.Lock()
+	before := b.consumerSet(bucket)
 	w, err := kv.Watch(keys)
+	watchMu.Unlock()
 	if err != nil {
 		return nil, nil, err
 	}
 	ch := make(chan bus.KvEvent, 32)
-	stop := func() { _ = w.Stop() }
+	// Stop the iterator AND delete the consumer it created.
+	//
+	// `w.Stop()` alone only ends the client-side iteration. `kv.Watch` is built on an ORDERED
+	// consumer (`oc_*_1`, ack_policy none, deliver_subject `_INBOX.*`), and that consumer can
+	// survive the stop — its inbox subscription stays registered, so the server still considers it
+	// active and the inactive_threshold (300s for ordered, 5s for plain ephemeral) never fires.
+	//
+	// The damaging shape is a watch per REQUEST rather than per process: listing keys opens one,
+	// so a UI that lists keys per page load opens one per page load. A deployment accumulated 3574
+	// over 14 days, with 3581 dangling `_INBOX.*` subscriptions on ONE agent connection, and the
+	// metadata raft snapshots grew with them.
+	//
+	// The watcher does not expose its consumer name, so it is found by DIFFING the consumer set
+	// across the watch's lifetime. That is not elegant, but it is the only way to name the thing
+	// you have to delete, and a wrong guess here would delete someone else's consumer.
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			_ = w.Stop()
+			for name := range b.consumerSet(bucket) {
+				if before[name] {
+					continue // pre-existing: not ours
+				}
+				if err := b.js.DeleteConsumer("KV_"+bucket, name); err != nil {
+					// The common failure is "consumer not found", which is the state we want.
+					log.Printf("[easybus] kv watch consumer %q delete: %v", name, err)
+				}
+			}
+		})
+	}
 	go func() {
 		defer close(ch)
 		snapshotDone := false
@@ -807,13 +910,21 @@ func (b *Bus) KvWatch(ctx context.Context, bucket, keys string) (<-chan bus.KvEv
 func (b *Bus) KVGet(ctx context.Context, bucket, key string) (string, error) {
 	kv, err := b.js.KeyValue(bucket)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	e, err := kv.Get(key)
 	if err != nil {
-		// KeyNotFound includes tombstones from a prior Delete — the value is
-		// gone either way, so a miss ("" ,nil) is the honest answer.
-		return "", nil
+		// A MISS, not a failure: the key is absent (deleted, or expired under a short TTL between
+		// being listed and being read — the server reports "no message found" for that). Callers
+		// already treat "" as absent, so returning it with no error is the honest answer.
+		//
+		// Any OTHER error is reported. Swallowing everything made a dead connection or a missing
+		// bucket look exactly like "the key is not set", so a caller took its default branch and
+		// never retried.
+		if errors.Is(err, nats.ErrKeyNotFound) || isNoMessageFound(err) {
+			return "", nil
+		}
+		return "", err
 	}
 	if e.Operation() != nats.KeyValuePut {
 		return "", nil
@@ -821,16 +932,49 @@ func (b *Bus) KVGet(ctx context.Context, bucket, key string) (string, error) {
 	return string(e.Value()), nil
 }
 
+// isNoMessageFound matches the server's "no message found" (10037): what a Get returns when the
+// key expired under a TTL between being listed and being read.
+func isNoMessageFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no message found")
+}
+
 func (b *Bus) KVCas(ctx context.Context, bucket, key, value string, revision int64) (int64, error) {
 	kv, err := b.js.KeyValue(bucket)
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	rev, err := kv.Update(key, []byte(value), uint64(revision))
 	if err != nil {
-		return 0, nil
+		// REPORT the conflict instead of disguising it as rev=0.
+		//
+		// Callers distinguish "the write lost a race" (0) from "the write failed" (error), and
+		// swallowing the error here collapsed the two: a lease renewal that lost a CAS was
+		// indistinguishable from a network failure, so `Renew` could not tell "another replica took
+		// over" from "try again next tick".
+		if errors.Is(err, nats.ErrKeyExists) || isWrongLastSequence(err) {
+			// A lost CAS is a normal, expected outcome: report rev=0 with no error.
+			return 0, nil
+		}
+		return 0, err
 	}
 	return int64(rev), nil
+}
+
+// isWrongLastSequence reports the server's reject for a CAS that lost a race.
+//
+// NATS answers 10071 "wrong last sequence: N". The client does not expose a typed error for it, so
+// the message is matched.
+func isWrongLastSequence(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "wrong last sequence") ||
+		strings.Contains(msg, "stream wrong last sequence")
 }
 
 func (b *Bus) KVDelete(ctx context.Context, bucket, key string) error {
