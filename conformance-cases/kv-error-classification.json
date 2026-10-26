@@ -1,0 +1,91 @@
+{
+  "id": "kv-error-classification",
+  "why": "Every SDK's KV wrapper turned EVERY failure into a zero value. In Go, `KVCas` returned (0, nil) for all errors, and `Renew` reads 0 as 'the lease was LOST' — so a network blip aborted a healthy in-flight turn. `KVCreate` had the same shape, so a replica that had lost its connection concluded another replica owned the session and ran nothing at all. Neither appears as an error anywhere. TypeScript, Python and Rust all have the identical `catch { return 0 }` / `except: return 0` / `Err(_) => 0`. The fix is not 'stop catching' — a lost race is a normal outcome and must stay a zero value with no error — it is to categorise: only the EXPECTED outcomes are zero-without-error, and everything else must surface. These cases pin the categorisation, which is the part four implementations can silently disagree about.",
+  "kind": "error-classification",
+  "cases": [
+    {
+      "err": "nats: wrong last sequence: 42",
+      "lostRace": true,
+      "absent": false,
+      "consumerGone": false,
+      "why": "The server's reply to a CAS that lost a race. Normal, expected: report a zero revision and NO error."
+    },
+    {
+      "err": "nats: stream wrong last sequence",
+      "lostRace": true,
+      "absent": false,
+      "consumerGone": false,
+      "why": "Same rejection, phrased with the `stream` prefix. Matching only the bare form would classify this as a real failure."
+    },
+    {
+      "err": "nats: wrong last sequence",
+      "lostRace": true,
+      "absent": false,
+      "consumerGone": false,
+      "why": "No trailing revision — some server versions omit it."
+    },
+    {
+      "err": "nats: no message found",
+      "lostRace": false,
+      "absent": true,
+      "consumerGone": false,
+      "why": "What Get returns when the key expired under a short TTL between being listed and being read. A MISS, not an error."
+    },
+    {
+      "err": "nats: key not found",
+      "lostRace": false,
+      "absent": true,
+      "consumerGone": false,
+      "why": "The other phrasing of an absent key."
+    },
+    {
+      "err": "nats: consumer not found",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": true,
+      "why": "The durable consumer was deleted underneath a long-lived subscription. Rebuild it — do not treat it as idleness, or the loop spins forever delivering nothing."
+    },
+    {
+      "err": "nats: no responders available for request",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": true,
+      "why": "What a pull Fetch actually returns once the consumer is gone. This was mistaken for 'nothing to read' and produced 2,814,600 empty pulls in one deployment."
+    },
+    {
+      "err": "nats: timeout",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": false,
+      "why": "A genuine idle pull. Must be NONE of the fault categories: classifying it as a lost consumer would rebuild the consumer on every quiet second."
+    },
+    {
+      "err": "nats: connection closed",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": false,
+      "why": "A transport failure. Must NOT be classified as a lost race — that is the bug that killed turns."
+    },
+    {
+      "err": "nats: timeout",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": false,
+      "why": "Repeated deliberately: a timeout must not be a lost race AND must not be a deleted consumer. Both would be wrong, in opposite directions."
+    },
+    {
+      "err": "permission violation for $KV.cfg.>",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": false,
+      "why": "An authorisation failure is a real failure: reporting it as absent would make an extension quietly start with no configuration."
+    },
+    {
+      "err": "",
+      "lostRace": false,
+      "absent": false,
+      "consumerGone": false,
+      "why": "No error at all. Must match NOTHING, or every success path takes a fault branch and misreads its own result."
+    }
+  ]
+}

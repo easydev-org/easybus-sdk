@@ -576,23 +576,6 @@ func (s *inboxSub) recreate() error {
 	return nil
 }
 
-// isConsumerGone reports whether an error means the consumer no longer exists.
-//
-// Matched on the message because the nats.go client does not export a typed error for this: the
-// server answers 404 "consumer not found" and the client surfaces it as plain text.
-func isConsumerGone(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, nats.ErrConsumerNotFound) || errors.Is(err, nats.ErrBadSubscription) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "consumer not found") ||
-		strings.Contains(msg, "consumer deleted") ||
-		strings.Contains(msg, "no responders")
-}
-
 type inboxSub struct {
 	js      nats.JetStreamContext
 	subject string
@@ -611,7 +594,7 @@ func (s *inboxSub) Next(ctx context.Context) (*bus.InboxMsg, bool) {
 		// spun millions of times per minute while reporting nothing: `Fetch` fails IMMEDIATELY
 		// when the consumer is gone, so the caller's idle branch re-fetched in a tight loop and
 		// the durable consumer stayed missing. Say which it is.
-		if isConsumerGone(err) {
+		if protocol.IsConsumerGone(err) {
 			log.Printf("[easybus] inbox consumer %q is gone (%v); recreating", s.durable, err)
 			if rerr := s.recreate(); rerr != nil {
 				log.Printf("[easybus] inbox consumer %q recreate failed: %v", s.durable, rerr)
@@ -921,7 +904,7 @@ func (b *Bus) KVGet(ctx context.Context, bucket, key string) (string, error) {
 		// Any OTHER error is reported. Swallowing everything made a dead connection or a missing
 		// bucket look exactly like "the key is not set", so a caller took its default branch and
 		// never retried.
-		if errors.Is(err, nats.ErrKeyNotFound) || isNoMessageFound(err) {
+		if errors.Is(err, nats.ErrKeyNotFound) || protocol.IsAbsentKey(err) {
 			return "", nil
 		}
 		return "", err
@@ -930,16 +913,6 @@ func (b *Bus) KVGet(ctx context.Context, bucket, key string) (string, error) {
 		return "", nil
 	}
 	return string(e.Value()), nil
-}
-
-// isNoMessageFound matches the server's "no message found" (10037): what a Get returns when the
-// key expired under a TTL between being listed and being read.
-func isNoMessageFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no message found")
 }
 
 func (b *Bus) KVCas(ctx context.Context, bucket, key, value string, revision int64) (int64, error) {
@@ -955,25 +928,12 @@ func (b *Bus) KVCas(ctx context.Context, bucket, key, value string, revision int
 		// swallowing the error here collapsed the two: a lease renewal that lost a CAS was
 		// indistinguishable from a network failure, so Renew could not tell "another replica took
 		// over" from "try again next tick".
-		if errors.Is(err, nats.ErrKeyExists) || isWrongLastSequence(err) {
+		if errors.Is(err, nats.ErrKeyExists) || protocol.IsLostRace(err) {
 			return 0, nil // a lost CAS is a normal outcome
 		}
 		return 0, err
 	}
 	return int64(rev), nil
-}
-
-// isWrongLastSequence reports the server's reject for a CAS that lost a race.
-//
-// NATS answers 10071 "wrong last sequence: N". The client does not expose a typed error for it, so
-// the message is matched.
-func isWrongLastSequence(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "wrong last sequence") ||
-		strings.Contains(msg, "stream wrong last sequence")
 }
 
 func (b *Bus) KVDelete(ctx context.Context, bucket, key string) error {

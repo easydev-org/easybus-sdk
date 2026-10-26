@@ -76,6 +76,8 @@ func TestSharedCases(t *testing.T) {
 				runChannelSubjectsCase(t, c)
 			case "protocol-subjects":
 				runProtocolSubjectsCase(t, c)
+			case "error-classification":
+				runErrorClassificationCase(t, c)
 			case "broker-fixture", "broker-cases":
 				// Not a single assertion, and not a broker case either: these are the INPUTS to
 				// the broker suite (the extension it builds and the calls it makes), which
