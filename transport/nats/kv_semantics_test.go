@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/easydev-org/easybus-sdk/natsrun"
 	"github.com/easydev-org/easybus-sdk/protocol"
 )
 
@@ -81,5 +82,88 @@ func TestKVGetAbsentKeyIsAMiss(t *testing.T) {
 	}
 	if v != "" {
 		t.Fatalf("got %q, want empty", v)
+	}
+}
+
+// A CAS against a BROKEN broker must return an error, not rev 0.
+//
+// This is the half the lease tests cannot see: by the time the value reaches `Renew`, both "lost
+// the race" and "the call failed" have already been flattened into `rev 0`. The distinction only
+// exists HERE, so only a test here can protect it.
+//
+// Consequence of getting it wrong, in the words of the caller: `Renew` returns (false, nil) for a
+// network failure, and the runtime reads that as "another replica took the session" — it aborts a
+// turn it is legitimately running.
+func TestKVCasReportsFailureNotLoss(t *testing.T) {
+	// A broker this test can STOP, so the failure is a real transport failure rather than a
+	// locally-closed client, which fails earlier and in a different branch.
+	srv, err := natsrun.Start(natsrun.Config{Storage: natsrun.Memory})
+	if err != nil {
+		t.Skipf("no nats-server: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	b, err := Connect(srv.URL())
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer b.Close()
+
+	bucket := "caserrup"
+	key := "k1"
+	rev, err := b.KVCreate(ctx, bucket, key, "v1", 0)
+	if err != nil || rev == 0 {
+		t.Fatalf("seed: rev=%d err=%v", rev, err)
+	}
+
+	// Kill the server: the next CAS cannot complete. This is the broker-restart case.
+	_ = srv.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	gotRev, gotErr := b.KVCas(ctx, bucket, key, "v2", rev)
+	if gotErr == nil {
+		t.Fatalf("a CAS against a closed connection returned (rev=%d, nil): the caller reads "+
+			"rev 0 as 'the lease was lost' and aborts a healthy turn", gotRev)
+	}
+	if gotRev != 0 {
+		t.Fatalf("returned rev %d together with an error, want 0", gotRev)
+	}
+}
+
+// A CREATE against a broken broker must also report the failure.
+//
+// `Claim` reads rev 0 as "another replica owns this session" and silently returns. A replica that
+// has lost its connection would therefore never run the turn, and nothing would say why.
+func TestKVCreateReportsFailureNotConflict(t *testing.T) {
+	srv, err := natsrun.Start(natsrun.Config{Storage: natsrun.Memory})
+	if err != nil {
+		t.Skipf("no nats-server: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	b, err := Connect(srv.URL())
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer b.Close()
+
+	bucket := "createrrup"
+	if rev, err := b.KVCreate(ctx, bucket, "seed", "v", 0); err != nil || rev == 0 {
+		t.Fatalf("seed: rev=%d err=%v", rev, err)
+	}
+
+	_ = srv.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	rev, err := b.KVCreate(ctx, bucket, "another", "v", 0)
+	if err == nil {
+		t.Fatalf("a CREATE against a closed connection returned (rev=%d, nil): the caller reads "+
+			"rev 0 as 'another replica owns the session' and never runs the turn", rev)
 	}
 }

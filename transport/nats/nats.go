@@ -953,11 +953,10 @@ func (b *Bus) KVCas(ctx context.Context, bucket, key, value string, revision int
 		//
 		// Callers distinguish "the write lost a race" (0) from "the write failed" (error), and
 		// swallowing the error here collapsed the two: a lease renewal that lost a CAS was
-		// indistinguishable from a network failure, so `Renew` could not tell "another replica took
+		// indistinguishable from a network failure, so Renew could not tell "another replica took
 		// over" from "try again next tick".
 		if errors.Is(err, nats.ErrKeyExists) || isWrongLastSequence(err) {
-			// A lost CAS is a normal, expected outcome: report rev=0 with no error.
-			return 0, nil
+			return 0, nil // a lost CAS is a normal outcome
 		}
 		return 0, err
 	}
