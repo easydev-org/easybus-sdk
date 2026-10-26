@@ -38,8 +38,11 @@ const (
 	dlqWildcard       = "easybus.*.dlq.>"
 	durableConsumer   = "easybus-mailbox-push"
 	queueGroup        = "easybus-mailbox"
-	objectBucket      = "EASYBUS_TOOL"
-	objectBucketDur   = "EASYBUS_FILES"
+	// objectBucket is the TRANSIENT store: in-flight hand-off between two parties, TTL-bounded at
+	// 24h. PERSISTENT bytes are never kept here — they belong to an S3-compatible backend and
+	// nothing else. There is deliberately no NATS bucket for them: a fallback would have made "a
+	// persistent file" mean S3 in one deployment and a broker stream in another.
+	objectBucket = "EASYBUS_TOOL"
 )
 
 // Bus is the NATS transport adapter.
@@ -47,10 +50,28 @@ type Bus struct {
 	nc  *nats.Conn
 	js  nats.JetStreamContext
 	idn *identity.Identity
-	// durable, when set, owns ObjectPutPersistent/ObjectGetPersistent (file
-	// bytes). Transient objects always stay on NATS. One backend, no fallback.
+	// durable owns ObjectPutPersistent/ObjectGetPersistent (persistent file bytes).
+	//
+	// TRANSIENT objects always stay on NATS (they are in-flight hand-off, TTL-bounded). PERSISTENT
+	// bytes have exactly ONE backend and it is not NATS: falling back to the NATS object store
+	// when no durable backend is configured meant a deployment could silently keep user files in
+	// the broker while its operator believed they were in S3 — the same code path, two different
+	// answers to "where is this file", and only the config distinguishes them.
+	//
+	// nil means "no persistent backend configured" and the persistent methods FAIL. See
+	// ErrNoDurableObjectStore.
 	durable bus.ObjectStore
 }
+
+// ErrNoDurableObjectStore is returned by the persistent object methods when no durable backend is
+// configured.
+//
+// A fallback to NATS would be a silent behaviour change, not a degradation: the bytes would be
+// stored (so nothing errors), in a place the operator did not choose, with the broker's retention
+// rules instead of S3's durability. Refusing is the only answer that keeps one meaning for
+// "persistent".
+var ErrNoDurableObjectStore = errors.New(
+	"no durable object store configured: persistent files require an S3-compatible backend")
 
 var _ bus.Bus = (*Bus)(nil)
 
@@ -710,29 +731,18 @@ func (b *Bus) ObjectGet(ctx context.Context, name string) ([]byte, error) {
 }
 
 func (b *Bus) ObjectPutPersistent(ctx context.Context, name string, data []byte) error {
-	if b.durable != nil {
-		return b.durable.ObjectPutPersistent(ctx, name, data)
+	// NO FALLBACK. Persistent bytes have exactly one backend; see the field comment.
+	if b.durable == nil {
+		return ErrNoDurableObjectStore
 	}
-	os, err := b.js.CreateObjectStore(&nats.ObjectStoreConfig{Bucket: objectBucketDur})
-	if err != nil {
-		os, err = b.js.ObjectStore(objectBucketDur)
-		if err != nil {
-			return err
-		}
-	}
-	_, err = os.PutBytes(name, data)
-	return err
+	return b.durable.ObjectPutPersistent(ctx, name, data)
 }
 
 func (b *Bus) ObjectGetPersistent(ctx context.Context, name string) ([]byte, error) {
-	if b.durable != nil {
-		return b.durable.ObjectGetPersistent(ctx, name)
+	if b.durable == nil {
+		return nil, ErrNoDurableObjectStore
 	}
-	os, err := b.js.ObjectStore(objectBucketDur)
-	if err != nil {
-		return nil, nil
-	}
-	return os.GetBytes(name)
+	return b.durable.ObjectGetPersistent(ctx, name)
 }
 
 // kvStore creates-or-opens a KV bucket. CreateKeyValue errors when the
