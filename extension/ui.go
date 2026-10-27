@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"bytes"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -54,7 +56,6 @@ func MountUI(handler http.Handler, spec *UISpec) http.Handler {
 	}
 
 	base := strings.TrimSuffix(spec.Base, "/")
-	files := http.FileServer(http.FS(uiFS{spec.Assets, spec.StripPrefix, base}))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != base && !strings.HasPrefix(r.URL.Path, base+"/") {
@@ -62,20 +63,21 @@ func MountUI(handler http.Handler, spec *UISpec) http.Handler {
 			return
 		}
 
-		// Content the host embeds must not be framed by anything else.
+		// Content the host embeds must not be framed by anything else, and must not be sniffed into
+		// a different type than the one we set.
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 
 		// The router owns everything after Base, so a request for a route (not a file) has to reach
-		// index.html. Serve the file server first, and fall back only when the path has no
-		// extension — "/ext/x/assets/app.js" must 404 rather than quietly return HTML, because a
-		// missing asset reported as index.html is a blank page with no error anywhere.
-		if p := r.URL.Path; p == base || p == base+"/" || isUIRoute(p, base) {
-			r = withPath(r, "/index.html")
-		} else {
-			r = withPath(r, strings.TrimPrefix(p, base))
+		// index.html. Fall back only when the path has no extension: "/ext/x/assets/app.js" must 404
+		// rather than quietly return HTML, because a missing asset reported as index.html is a blank
+		// page with no error anywhere.
+		rel := strings.TrimPrefix(r.URL.Path, base)
+		rel = strings.TrimPrefix(rel, "/")
+		if rel == "" || isUIRoute(r.URL.Path, base) {
+			rel = "index.html"
 		}
-		files.ServeHTTP(w, r)
+		serveUIFile(w, r, spec, rel)
 	})
 }
 
@@ -87,33 +89,38 @@ func isUIRoute(p, base string) bool {
 	return path.Ext(rest) == ""
 }
 
-// withPath clones r with a rewritten URL path, leaving the original untouched.
-func withPath(r *http.Request, p string) *http.Request {
-	c := r.Clone(r.Context())
-	c.URL.Path = p
-	c.URL.RawPath = ""
-	return c
-}
-
-// uiFS maps a request path back onto the embedded tree.
+// serveUIFile writes one file from the embedded tree.
 //
-// http.FileServer has no notion of a URL prefix, so the prefix is stripped here rather than by a
-// second router: one place decides how a URL becomes a file.
-type uiFS struct {
-	fsys   fs.FS
-	strip  string
-	base   string
-}
+// NOT http.FileServer: it answers a request for "/index.html" with a 301 to "./", which turns a
+// deep link like /ext/x/repo/y into a redirect the host never asked for. Reading the file and writing
+// it directly keeps the URL the caller used.
+func serveUIFile(w http.ResponseWriter, r *http.Request, spec *UISpec, rel string) {
+	name := path.Clean("/" + rel)
+	name = strings.TrimPrefix(name, "/")
+	if spec.StripPrefix != "" {
+		name = path.Join(spec.StripPrefix, name)
+	}
+	f, err := spec.Assets.Open(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = f.Close() }()
 
-func (u uiFS) Open(name string) (fs.File, error) {
-	if name == u.base {
-		name = "/"
-	} else {
-		name = strings.TrimPrefix(name, u.base)
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		http.NotFound(w, r)
+		return
 	}
-	name = strings.TrimPrefix(path.Clean("/"+name), "/")
-	if u.strip != "" {
-		name = path.Join(u.strip, name)
+	// A directory index is not a file we serve; index.html is handled by the caller's rewrite.
+	if seeker, ok := f.(io.ReadSeeker); ok {
+		http.ServeContent(w, r, st.Name(), st.ModTime(), seeker)
+		return
 	}
-	return u.fsys.Open(name)
+	data, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	http.ServeContent(w, r, st.Name(), st.ModTime(), bytes.NewReader(data))
 }
