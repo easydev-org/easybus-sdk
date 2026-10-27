@@ -28,6 +28,11 @@ type ServeOptions struct {
 	Run func(ctx context.Context, ext *Extension)
 	// Port overrides EASYBUS_PORT (default 8080) when non-empty.
 	Port string
+	// UI, when set, is served from this extension's HTTP surface under UISpec.Base.
+	//
+	// It is wrapped AROUND Handler rather than merged into it, so an extension never has to know
+	// which paths the UI claims: paths outside Base reach Handler exactly as before. See MountUI.
+	UI *UISpec
 }
 
 // Serve blocks until SIGINT/SIGTERM or a hard error, then shuts everything
@@ -65,6 +70,22 @@ func Serve(ext *Extension, opts ServeOptions) error {
 		handler = mux
 	}
 
+	// The UI claims only its own prefix; everything else (probes, API) is untouched.
+	handler = MountUI(handler, opts.UI)
+
+	// A host that embeds the UI needs to know the mount point without parsing our source.
+	if opts.UI != nil && opts.UI.Base != "" {
+		inner := handler
+		m := http.NewServeMux()
+		m.HandleFunc("/api/v1/ui", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"base": opts.UI.Base, "title": opts.UI.Title, "id": ext.cfg.ID,
+			})
+		})
+		m.Handle("/", inner)
+		handler = m
+	}
 	srv := &http.Server{Addr: ":" + port, Handler: handler}
 	errCh := make(chan error, 1)
 	go func() {
