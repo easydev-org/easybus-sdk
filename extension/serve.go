@@ -3,6 +3,8 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -72,6 +74,28 @@ func Serve(ext *Extension, opts ServeOptions) error {
 
 	// The UI claims only its own prefix; everything else (probes, API) is untouched.
 	handler = MountUI(handler, opts.UI)
+
+	// Say what the UI mount resolved to.
+	//
+	// A nil or empty spec is legal, so nothing about it is an error — which is exactly why it has to
+	// be logged: an extension that MEANT to ship a UI but served none is indistinguishable from one
+	// with no UI, and the only symptom is a 404 in a browser. That cost a deploy round trip.
+	if opts.UI != nil {
+		n := 0
+		if opts.UI.Assets != nil {
+			_ = fs.WalkDir(opts.UI.Assets, ".", func(p string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					n++
+				}
+				return nil
+			})
+		}
+		slog.Info("ui mount", "base", opts.UI.Base, "assets", n)
+		if n == 0 {
+			slog.Warn("ui mount has NO assets: go:embed matched nothing, so every UI path will 404",
+				"base", opts.UI.Base, "strip", opts.UI.StripPrefix)
+		}
+	}
 
 	// A host that embeds the UI needs to know the mount point without parsing our source.
 	if opts.UI != nil && opts.UI.Base != "" {
