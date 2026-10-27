@@ -38,6 +38,16 @@ type UISpec struct {
 	Base string
 	// Title is shown in the host's breadcrumb / tab.
 	Title string
+	// APIPrefix, when set, marks a sub-path of Base that belongs to the extension's own handlers
+	// rather than to the static bundle.
+	//
+	// Without it a request like /ext/github/api/workspaces has no file extension, so the SPA
+	// fallback below would answer it with index.html — the browser then fails to parse HTML as JSON
+	// and every call looks broken with no failing URL. Requests under this prefix are passed to
+	// Handler untouched.
+	//
+	// It is RELATIVE to Base (e.g. "/api"), and only meaningful when Handler also serves those paths.
+	APIPrefix string
 }
 
 // MountUI wraps handler so the extension's UI is served, and returns the composite handler.
@@ -56,9 +66,20 @@ func MountUI(handler http.Handler, spec *UISpec) http.Handler {
 	}
 
 	base := strings.TrimSuffix(spec.Base, "/")
+	apiPrefix := ""
+	if spec.APIPrefix != "" {
+		apiPrefix = base + "/" + strings.Trim(spec.APIPrefix, "/")
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != base && !strings.HasPrefix(r.URL.Path, base+"/") {
+			handler.ServeHTTP(w, r)
+			return
+		}
+
+		// The extension's own API lives under the same prefix, so it must reach Handler instead of
+		// the bundle. Checked BEFORE the SPA fallback, which would otherwise swallow it.
+		if apiPrefix != "" && (r.URL.Path == apiPrefix || strings.HasPrefix(r.URL.Path, apiPrefix+"/")) {
 			handler.ServeHTTP(w, r)
 			return
 		}
