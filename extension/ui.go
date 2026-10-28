@@ -48,6 +48,20 @@ type UISpec struct {
 	//
 	// It is RELATIVE to Base (e.g. "/api"), and only meaningful when Handler also serves those paths.
 	APIPrefix string
+	// Descriptions describe the extension in the host's shelf, keyed by BCP-47 language tag ("en",
+	// "zh"). The host picks the entry matching the reader's locale and falls back to the first
+	// non-empty one.
+	//
+	// WHY THE EXTENSION DECLARES IT: the host can discover that a UI exists, but only the extension
+	// knows what the UI is FOR. Declaring it here keeps the text beside the UI it describes, and a
+	// build with no UI declares none.
+	Descriptions map[string]string
+	// Icon is a path under Base serving the shelf icon, e.g. "/icon.svg".
+	//
+	// Served by this extension rather than embedded by the host, so an extension can change its own
+	// icon without a host release — and a host that has never heard of this extension still renders it
+	// correctly. Empty means "no icon": the host shows a neutral glyph rather than a broken image.
+	Icon string
 }
 
 // MountUI wraps handler so the extension's UI is served, and returns the composite handler.

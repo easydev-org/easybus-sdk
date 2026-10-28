@@ -104,9 +104,19 @@ func Serve(ext *Extension, opts ServeOptions) error {
 		m := http.NewServeMux()
 		uiInfo := func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			body := map[string]any{
 				"base": opts.UI.Base, "title": opts.UI.Title, "id": ext.cfg.ID,
-			})
+			}
+			// Present only when declared. An empty map would make the host render an empty description
+			// where it could have shown nothing, and an empty icon path would be a broken image rather
+			// than no image.
+			if len(opts.UI.Descriptions) > 0 {
+				body["descriptions"] = opts.UI.Descriptions
+			}
+			if opts.UI.Icon != "" {
+				body["icon"] = opts.UI.Icon
+			}
+			_ = json.NewEncoder(w).Encode(body)
 		}
 		// BOTH paths, and the second one is the important one.
 		//
