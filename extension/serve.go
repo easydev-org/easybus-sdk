@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -101,12 +102,24 @@ func Serve(ext *Extension, opts ServeOptions) error {
 	if opts.UI != nil && opts.UI.Base != "" {
 		inner := handler
 		m := http.NewServeMux()
-		m.HandleFunc("/api/v1/ui", func(w http.ResponseWriter, _ *http.Request) {
+		uiInfo := func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"base": opts.UI.Base, "title": opts.UI.Title, "id": ext.cfg.ID,
 			})
-		})
+		}
+		// BOTH paths, and the second one is the important one.
+		//
+		// A host that embeds this UI proxies `/ext/<id>/*` and nothing else, so the root path below is
+		// unreachable FROM THAT HOST — it would have to guess the port. Registering the answer under
+		// the base as well is what lets a host ask "does this extension have a UI, and what is it
+		// called?" through the same proxy it already uses for everything else.
+		//
+		// The root path stays for direct callers (probes, a host on the same network) that never knew
+		// about the mount in the first place.
+		base := strings.TrimSuffix(opts.UI.Base, "/")
+		m.HandleFunc("/api/v1/ui", uiInfo)
+		m.HandleFunc(base+"/api/v1/ui", uiInfo)
 		m.Handle("/", inner)
 		handler = m
 	}
