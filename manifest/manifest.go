@@ -101,6 +101,13 @@ type ManifestTool struct {
 	Namespace string `yaml:"namespace"`
 	// Requires names the permission keys a caller must hold to invoke this tool.
 	Requires []string `yaml:"requires"`
+	// ReadOnly declares that this tool only looks — it changes nothing.
+	//
+	// The turn loop runs read-only tools CONCURRENTLY and keeps everything else strictly in
+	// model order, so this is a latency statement, not a safety one. Absent means false:
+	// an undeclared read costs a round trip, while an undeclared write would let effects
+	// reorder, and only one of those is a bug.
+	ReadOnly bool `yaml:"read_only"`
 }
 
 // ManifestVariable declares one prompt template variable.
@@ -271,6 +278,7 @@ func (m *Manifest) BuildConfig(b Bindings) extension.Config {
 		h.InputSchema = t.InputSchema
 		h.RequiredConfig = t.RequiredConfig
 		h.Namespace = t.Namespace
+		h.ReadOnly = t.ReadOnly
 		// The manifest is the SINGLE source for what a tool requires: a handler cannot
 		// quietly attach a requirement the manifest does not document, and the manifest
 		// entry is what a client reads to know what to ask the user for.
