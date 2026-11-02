@@ -122,7 +122,7 @@ func (s *Sweeper) markLost(ctx context.Context, e Entry, revision int64) {
 	if err != nil {
 		return
 	}
-	if _, err := s.reg.bus.KVCas(ctx, s.reg.bucket, Key(e.ExtID, e.Session, e.ID), string(body), revision); err != nil {
+	if _, err := s.reg.bus.KVCas(ctx, s.reg.bucket, Key(e.Tenant, e.Session, e.ID), string(body), revision); err != nil {
 		// EITHER THE OWNER RENEWED (the good case) or another sweeper got there first
 		// (also fine). Neither is worth a warning: the outcome is correct either way.
 		slog.DebugContext(ctx, "job: lost-mark skipped, entry moved", "svc", "job", "job", e.ID)

@@ -151,6 +151,39 @@ func TestKeySegmentsOrderFromGeneralToSpecific(t *testing.T) {
 	}
 }
 
+/**
+ * A KEY BUILT FROM THE WRONG FIELD IS INVISIBLE, NOT WRONG-LOOKING.
+ *
+ * The bucket key is `t.<tenant>.s.<session>.<id>`. Building it from an entry's `ExtID` produces a
+ * valid key under a tenant nobody queries: the job registers, renews and finishes, and the list that
+ * asks for `t.<tenant>.s.<session>.*` never sees it. Nothing logs, nothing errors — the only symptom
+ * is an empty list beside a task the reader watched run.
+ *
+ * THIS TEST EXISTS BECAUSE THAT HAPPENED: `Key(e.ExtID, e.Session, e.ID)` and
+ * `SessionPrefix(tenant, session)` were both "right" on their own.
+ */
+func TestWriteKeyAndReadPrefixAgree(t *testing.T) {
+	e := Entry{Tenant: "alice", ExtID: "sandbox", Session: "s1", ID: "sandbox-job.abc"}
+	written := Key(e.Tenant, e.Session, e.ID)
+	prefix := SessionPrefix(e.Tenant, e.Session)
+
+	// THE WRITE KEY MUST BE INSIDE THE PREFIX the reader asks for.
+	stem := prefix[:len(prefix)-1] // strip the trailing "*"
+	if len(written) <= len(stem) || written[:len(stem)] != stem {
+		t.Fatalf("a job written at %q is not visible under %q", written, prefix)
+	}
+
+	// AND THE EXTENSION ID MUST NOT APPEAR WHERE THE TENANT BELONGS — that is the exact mistake, and
+	// it is spelled out rather than implied so the failure names the cause.
+	wrong := Key(e.ExtID, e.Session, e.ID)
+	if wrong == written {
+		t.Fatal("the tenant and ext id produced the same key; the test cannot tell them apart")
+	}
+	if len(wrong) > len(stem) && wrong[:len(stem)] == stem {
+		t.Fatal("a key built from the ext id fell inside the tenant prefix; the segments overlap")
+	}
+}
+
 func TestEntryRoundTripsThroughTheOneEncoder(t *testing.T) {
 	exit := 3
 	in := Entry{

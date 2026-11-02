@@ -95,11 +95,11 @@ func (r *Registry) put(ctx context.Context, e Entry, ttl time.Duration) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.bus.KVCreate(ctx, r.bucket, Key(e.ExtID, e.Session, e.ID), string(body), ttl.Milliseconds())
+	_, err = r.bus.KVCreate(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
 	if err != nil {
 		// A key that already exists is not a create; fall through to a put so a
 		// re-registration after a restart still lands.
-		return r.bus.KVPut(ctx, r.bucket, Key(e.ExtID, e.Session, e.ID), string(body), ttl.Milliseconds())
+		return r.bus.KVPut(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
 	}
 	return nil
 }

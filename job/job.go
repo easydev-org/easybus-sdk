@@ -118,6 +118,17 @@ type Entry struct {
 	Session string `json:"session"`
 
 	/**
+	 * Tenant is whose configuration the work belongs to.
+	 *
+	 * IT IS SEPARATE FROM ExtID AND IT HAS TO BE HERE. The bucket key is `t.<tenant>.s.<session>.<id>`,
+	 * and the writer is the only place that knows all three — an entry without its tenant cannot be
+	 * keyed correctly, and a key built from the wrong field is invisible to every reader rather than
+	 * obviously wrong: the job registers, renews, and finishes, while the list that asks for
+	 * `t.<tenant>.s.<session>.*` never sees it.
+	 */
+	Tenant string `json:"tenant"`
+
+	/**
 	 * ToolUseID ties the job back to the tool call that produced it.
 	 *
 	 * THE CALL RETURNS BEFORE THE JOB DOES, so by the time a completion notice arrives
