@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -110,9 +112,41 @@ type Options struct {
 	DurableObjects bus.ObjectStore
 }
 
+// EnvReplicas is the environment variable that sets the default replica count.
+//
+// WHY AN ENV VAR AND NOT JUST Options.Replicas: an extension is a separate process with a small
+// `main()` that calls Connect(url) — it has no configuration surface for this, and adding one to every
+// extension means a deployment has to set the same number in four places and can get three of them
+// wrong. Replication is a property of the DEPLOYMENT, not of the extension: it describes how many
+// brokers exist.
+//
+// Options.Replicas still wins when a caller sets it, so this is a default and not an override.
+const EnvReplicas = "EASYBUS_REPLICAS"
+
+// replicasFromEnv reads EnvReplicas, treating anything unparseable as zero.
+//
+// A BAD VALUE IS NOT FATAL. Refusing to start over a tunable would take a working deployment down for
+// a typo in a setting whose only effect is how many copies a new stream gets; zero (the broker
+// default) is a safe fallback and is what the process ran with before this existed.
+func replicasFromEnv() int {
+	raw := os.Getenv(EnvReplicas)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Printf("[easybus] ignoring %s=%q: want a non-negative integer", EnvReplicas, raw)
+		return 0
+	}
+	return n
+}
+
 // Connect establishes a NATS connection with the default stream topology.
+//
+// The replica count comes from EnvReplicas when set; see that constant for why the default is an
+// environment variable rather than another parameter every extension has to thread through.
 func Connect(url string) (*Bus, error) {
-	return ConnectWithOptions(url, Options{})
+	return ConnectWithOptions(url, Options{Replicas: replicasFromEnv()})
 }
 
 // ConnectWithOptions establishes a NATS connection and reconciles the
