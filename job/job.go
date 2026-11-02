@@ -16,30 +16,41 @@
 // bus, so an extension can use these types without taking on the transport.
 package job
 
-// State is a job's lifecycle position.
-//
-// FOUR STATES PLUS LOST. There is no "pending" and no "queued": a job exists only once
-// something has begun running it, so a state describing a job that has not started would
-// name a thing this system never holds.
+/**
+ * State says WHY a job stopped, and nothing else.
+ *
+ * THERE IS NO "failed". A job that exited 1 is `done` with ExitCode 1 — the state reports what
+ * ended, the exit code reports what the ending was worth. Collapsing the two would make the job
+ * decide success on the caller's behalf, and it cannot: `grep` exiting 1 means "no match", which
+ * is a successful search to one caller and a failed check to another. The job knows the code; the
+ * caller knows what it wanted.
+ *
+ * FOUR STATES, AND ONLY ONE OF THEM IS NOT AN ENDING. There is no "pending" or "queued" either: a
+ * job exists only once something has begun running it, so a state describing a job that has not
+ * started would name a thing this system never holds.
+ */
 type State string
 
 const (
 	// StateRunning is the only non-terminal state, and the only one that is renewed.
 	StateRunning State = "running"
-	// StateCompleted means the work finished. ExitCode says how.
-	StateCompleted State = "completed"
-	// StateFailed means the work ended badly — a non-zero exit, an unreachable target,
-	// a build that did not produce its artefact.
-	StateFailed State = "failed"
+	/**
+	 * StateDone means the process ended on its own. ExitCode says how.
+	 *
+	 * A NON-ZERO EXIT IS STILL `done`. The alternative — naming the state after the exit code —
+	 * puts the judgement in the wrong place and leaves a state (`completed`) that can contradict
+	 * its own exit code.
+	 */
+	StateDone State = "done"
 	// StateCancelled means something stopped it on purpose. Nothing produces this yet:
-	// cancellation is not in the first version, and the constant is here so the wire
-	// contract does not have to grow a second version to add it.
+	// cancellation is not in the first version, and the constant is here so the wire contract does
+	// not have to grow a second version to add it.
 	StateCancelled State = "cancelled"
-	// StateLost means the extension running it stopped renewing.
+	// StateLost means the extension running it stopped renewing, so no exit code exists.
 	//
-	// IT IS WRITTEN BY SOMEBODY ELSE. The extension cannot record its own death, so a
-	// sweeper that observes a stalled heartbeat records this in its place — see
-	// Terminated() for the judgement it makes.
+	// IT IS WRITTEN BY SOMEBODY ELSE. The extension cannot record its own death, so a sweeper that
+	// observes a stalled heartbeat records this in its place — see Terminated() for the judgement
+	// it makes.
 	StateLost State = "lost"
 )
 
@@ -51,7 +62,7 @@ func (s State) Terminal() bool {
 	switch s {
 	case StateRunning:
 		return false
-	case StateCompleted, StateFailed, StateCancelled, StateLost:
+	case StateDone, StateCancelled, StateLost:
 		return true
 	}
 	// An unknown state is treated as terminal: renewing something this code does not

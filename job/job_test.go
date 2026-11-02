@@ -58,7 +58,7 @@ func TestStalenessIsAtLeastTwoRenewalIntervals(t *testing.T) {
 }
 
 func TestTerminalStatesAreTerminal(t *testing.T) {
-	for _, s := range []State{StateCompleted, StateFailed, StateCancelled, StateLost} {
+	for _, s := range []State{StateDone, StateCancelled, StateLost} {
 		if !s.Terminal() {
 			t.Errorf("%s must be terminal", s)
 		}
@@ -70,6 +70,27 @@ func TestTerminalStatesAreTerminal(t *testing.T) {
 	// understand would keep it alive forever.
 	if !State("something-new").Terminal() {
 		t.Error("an unrecognised state must be treated as terminal")
+	}
+}
+
+/**
+ * THERE IS NO `failed` STATE, AND THAT IS THE POINT.
+ *
+ * A job that exited 1 is `done` with ExitCode 1. The job knows the code; the caller knows what it
+ * wanted — `grep` exiting 1 means "no match", which is a successful search and a failed check. A
+ * state named after the exit code would decide that on the caller's behalf.
+ *
+ * THIS TEST EXISTS TO STOP THE OBVIOUS "IMPROVEMENT" of splitting `done` into succeeded/failed.
+ */
+func TestDoneDoesNotDistinguishSuccessFromFailure(t *testing.T) {
+	if State("failed") == StateDone || State("succeeded") == StateDone {
+		t.Fatal("state vocabulary must not gain a success/failure split")
+	}
+	// The exit code is where that answer lives, and it is optional precisely because a cancelled
+	// or lost job has none.
+	e := Entry{State: StateDone}
+	if e.ExitCode != nil {
+		t.Fatal("a done job's exit code starts unset and is filled in by whoever ran it")
 	}
 }
 
@@ -90,7 +111,7 @@ func TestEntryRoundTripsThroughTheOneEncoder(t *testing.T) {
 	exit := 3
 	in := Entry{
 		ID: "sandbox.run.abc", Kind: "shell", Title: "cargo build",
-		State: StateCompleted, ExitCode: &exit,
+		State: StateDone, ExitCode: &exit,
 		StartedAt: 1000, FinishedAt: 2000, RenewedAt: 2000,
 		ExtID: "sandbox", Session: "s1", ToolUseID: "tool_1",
 	}
