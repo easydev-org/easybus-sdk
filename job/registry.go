@@ -97,19 +97,27 @@ func SessionPrefix(tenant, session string) string {
 	return fmt.Sprintf("t.%s.s.%s.>", tenant, session)
 }
 
-// put writes an entry with a TTL.
+/**
+ * put writes an entry with a TTL, creating it or replacing it.
+ *
+ * KVPUT ALONE, AND NOT "CREATE, THEN PUT ON FAILURE". `KVCreate` reports an existing key as
+ * `(0, nil)` — the normal losing side of a claim race — so a create-then-put treats "already there"
+ * as success and never reaches the put. The entry is written once at start and never again: the
+ * heartbeat is a silent no-op, every renewal is discarded, and the sweeper correctly concludes thirty
+ * seconds later that nobody is renewing.
+ *
+ * MEASURED, WHICH IS WHY THE ORDER IS NOW THE OTHER WAY ROUND: jobs appeared in the list and were
+ * immediately marked lost while they were still running, and the only clue was that `RenewedAt` never
+ * moved past its first value.
+ *
+ * Put is the operation. Create is for deciding who wins a race, and this is not one.
+ */
 func (r *Registry) put(ctx context.Context, e Entry, ttl time.Duration) error {
 	body, err := marshalEntry(e)
 	if err != nil {
 		return err
 	}
-	_, err = r.bus.KVCreate(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
-	if err != nil {
-		// A key that already exists is not a create; fall through to a put so a
-		// re-registration after a restart still lands.
-		return r.bus.KVPut(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
-	}
-	return nil
+	return r.bus.KVPut(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
 }
 
 /**
