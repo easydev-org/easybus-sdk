@@ -318,18 +318,6 @@ message ExtensionTool {
   // call's target (which repository? which sandbox?), and only the extension can
   // work that out — so the matching happens there. See PermissionDecl.
   repeated string requires = 7;
-  /**
-   * read_only declares that this tool only looks — it changes nothing.
-   *
-   * THE TURN LOOP USES IT TO RUN SEVERAL READS AT ONCE. Every tool used to run strictly in
-   * model order because a side-effecting one must not be overtaken; that is true, but it is a
-   * property of the tool rather than of the scheduler, and applying it to reads made a step
-   * with three lookups cost three round trips.
-   *
-   * ABSENT MEANS FALSE, which is the safe default: an undeclared read costs a round trip, while
-   * an undeclared write would let two effects run concurrently and reorder.
-   */
-  optional bool read_only = 8;
 }
 
 // PermissionDecl is one permission an extension can require.
