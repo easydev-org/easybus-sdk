@@ -129,4 +129,17 @@ type Entry struct {
 	// Reason explains a terminal state that needs one — why it was lost, or what the
 	// failure was. Empty when the state speaks for itself.
 	Reason string `json:"reason,omitempty"`
+
+	/**
+	 * Cancelable says whether cancelling this job can do anything.
+	 *
+	 * IT IS NOT "WHETHER THE JOB IS RUNNING" — a running job may still be uncancellable. A CI run
+	 * submitted to somebody else's system can only be ASKED to stop; a build in a queue has not
+	 * started; a process on a machine this extension cannot reach has no signal to receive.
+	 *
+	 * A CLIENT USES IT TO DECIDE WHETHER TO OFFER THE ACTION AT ALL. Drawing a cancel button beside
+	 * a job that cannot be cancelled teaches the reader that the button does not work, which is
+	 * worse than not drawing it.
+	 */
+	Cancelable bool `json:"cancelable,omitempty"`
 }

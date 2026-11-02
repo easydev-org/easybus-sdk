@@ -216,6 +216,25 @@ func (r *Registry) Get(ctx context.Context, tenant, session, jobID string) (Entr
 }
 
 /**
+ * Put rewrites an entry, choosing the TTL from its state.
+ *
+ * IT EXISTS FOR CANCELLATION, which is the one thing that changes an entry from OUTSIDE the handle
+ * that started it. The handle owns renewal and finishing; a cancel arrives on a different code path
+ * and has no handle to call Finish on.
+ *
+ * THE TTL FOLLOWS THE STATE: a rewrite that leaves the job running gets the short one and keeps
+ * needing renewal, and one that records an ending gets the long one. Getting this wrong in the
+ * direction of "always long" would leave cancelled jobs renewed forever by nobody.
+ */
+func (r *Registry) Put(ctx context.Context, e Entry) error {
+	ttl := r.RunningTTL
+	if e.State.Terminal() {
+		ttl = r.DoneTTL
+	}
+	return r.put(ctx, e, ttl)
+}
+
+/**
  * Watch streams one conversation's jobs: the current list first, then changes.
  *
  * THE INITIAL SNAPSHOT IS WHAT MAKES A PANEL OPEN INSTANTLY. A watch that only delivered
