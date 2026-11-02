@@ -3,11 +3,11 @@ package job
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/easydev-org/easybus-sdk/bus"
+	"github.com/easydev-org/easybus-sdk/sessionstore"
 )
 
 /**
@@ -25,6 +25,11 @@ import (
  * remember to check.
  */
 type Registry struct {
+	kv     *sessionstore.Store
+	// bus is kept for the ONE operation sessionstore does not offer: a compare-and-set. CAS is not
+	// part of "read and write a list" — it is how the sweeper avoids overwriting a renewal that landed
+	// between its read and its write — so it stays here rather than becoming a shape every list has
+	// to think about.
 	bus    bus.Bus
 	bucket string
 
@@ -34,6 +39,11 @@ type Registry struct {
 	// is gone by finding a STILL-PRESENT entry whose renewal is old. If the TTL expired
 	// first, the entry would vanish and there would be nothing left to judge — the job
 	// would simply disappear instead of being recorded as lost.
+	//
+	// IT IS NOT THE RENEWAL WINDOW, WHICH IS A COMMON READING AND THE WRONG ONE. Liveness is
+	// `RenewedAt` against StaleAfter; the TTL only decides when the STORE forgets the key. So this
+	// being the same as DoneTTL costs nothing but a few stale rows, while making it short would
+	// DELETE EVIDENCE — and NATS KV makes the choice for us anyway (see below).
 	RunningTTL time.Duration
 	// RenewEvery is how often a running entry is rewritten. A quarter of the TTL, so
 	// three consecutive renewals can fail before the entry lapses.
@@ -44,15 +54,28 @@ type Registry struct {
 	DoneTTL time.Duration
 }
 
-// Default timings, and the arithmetic behind each.
+/**
+ * Default timings, and the arithmetic behind each.
+ *
+ * ONE TTL, NOT TWO, BECAUSE NATS KV HAS ONE. Its TTL is a BUCKET setting — `CreateKeyValue(TTL: …)`,
+ * applied once when the bucket is created — and `Update` resets it to that same bucket value. A per-key
+ * lifetime cannot be expressed, so the two constants below are equal on purpose rather than by
+ * coincidence: a running entry and a finished one both live a day, and what distinguishes them is
+ * `State` and `RenewedAt`.
+ *
+ * THIS IS NOT A COMPROMISE, ONCE THE ROLES ARE SEPARATED. The TTL is the store's forgetting policy; the
+ * heartbeat is the liveness signal. Writing the entry for sixty seconds and relying on expiry to mean
+ * "the extension died" was asking the store to carry a judgement it cannot make — and it would have
+ * deleted the entry before the sweeper could record it as lost, which is the one outcome that mechanism
+ * exists to prevent.
+ */
 const (
-	// 60s TTL, renewed every 15s: four renewals fit inside one lifetime, so a lost
-	// renewal is not a lost job.
-	defaultRunningTTL = 60 * time.Second
+	// A day, matching DoneTTL — see the note above.
+	defaultRunningTTL = 24 * time.Hour
 	defaultRenewEvery = 15 * time.Second
 	// 30s stale: twice the renewal interval. One late renewal is tolerated, two
-	// consecutive misses are not, and the entry is still present at this point —
-	// which is exactly what the sweeper needs.
+	// consecutive misses are not. The entry is certainly still present at this point, which is what the
+	// sweeper needs — and is the reason RunningTTL must stay comfortably above this.
 	defaultStaleAfter = 30 * time.Second
 	// A day, because a finished job is history worth reading, not state worth holding.
 	defaultDoneTTL = 24 * time.Hour
@@ -63,6 +86,7 @@ const (
 // NewRegistry returns a registry over the shared jobs bucket.
 func NewRegistry(b bus.Bus) *Registry {
 	return &Registry{
+		kv:         sessionstore.New(b),
 		bus:        b,
 		bucket:     DefaultBucket,
 		RunningTTL: defaultRunningTTL,
@@ -72,64 +96,34 @@ func NewRegistry(b bus.Bus) *Registry {
 	}
 }
 
-/**
- * Key is the bucket key for one job.
- *
- * THE SEGMENTS ARE THERE TO BE WATCHED, not just to be unique. A client listing one
- * conversation asks for `t.<tenant>.s.<session>.*`, and a sweeper asks for every running
- * entry in a tenant; both are wildcard queries that only work if the parts are ordered
- * from least to most specific.
- */
+// Key is the bucket key for one job. The shape and its reasons live in sessionstore, which every
+// per-session list in this SDK shares.
 func Key(tenant, session, jobID string) string {
-	return fmt.Sprintf("t.%s.s.%s.%s", tenant, session, jobID)
+	return sessionstore.Key(tenant, session, jobID)
 }
 
-/**
- * SessionPrefix is the wildcard for one conversation's jobs.
- *
- * IT ENDS IN `>`, NOT `*`, AND THAT IS THE WHOLE POINT. NATS subject wildcards are per TOKEN: `*`
- * matches exactly one, `>` matches one or more of the remaining. A job id contains dots —
- * `sandbox-job.392f82df` — so `t.<tenant>.s.<session>.*` matched the `sandbox-job` token and then
- * expected the subject to end, which it does not. The watch was live, the jobs were written, and the
- * list came back empty.
- */
+// SessionPrefix is the wildcard for one conversation's jobs.
 func SessionPrefix(tenant, session string) string {
-	return fmt.Sprintf("t.%s.s.%s.>", tenant, session)
+	return sessionstore.Prefix(tenant, session)
 }
 
-/**
- * put writes an entry with a TTL, creating it or replacing it.
- *
- * KVPUT ALONE, AND NOT "CREATE, THEN PUT ON FAILURE". `KVCreate` reports an existing key as
- * `(0, nil)` — the normal losing side of a claim race — so a create-then-put treats "already there"
- * as success and never reaches the put. The entry is written once at start and never again: the
- * heartbeat is a silent no-op, every renewal is discarded, and the sweeper correctly concludes thirty
- * seconds later that nobody is renewing.
- *
- * MEASURED, WHICH IS WHY THE ORDER IS NOW THE OTHER WAY ROUND: jobs appeared in the list and were
- * immediately marked lost while they were still running, and the only clue was that `RenewedAt` never
- * moved past its first value.
- *
- * Put is the operation. Create is for deciding who wins a race, and this is not one.
- */
+// put writes an entry with the given TTL. The "put, never create" rule lives in sessionstore.
 func (r *Registry) put(ctx context.Context, e Entry, ttl time.Duration) error {
-	body, err := marshalEntry(e)
-	if err != nil {
-		return err
-	}
-	return r.bus.KVPut(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), string(body), ttl.Milliseconds())
+	return r.kv.Put(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), e, ttl)
 }
 
 /**
- * marshalEntry and unmarshalEntry are the ONLY places an entry touches JSON.
+ * unmarshalEntry is the ONLY place a job becomes bytes or back.
  *
- * ONE ENCODER AND ONE DECODER, so the writer and every reader — the watcher, the sweeper,
- * the client — cannot drift on field names. A second json.Marshal somewhere else is how a
- * producer ends up emitting `exitCode` while a consumer reads `exit_code`.
+ * ONE DECODER, so the writer and every reader — the watcher, the sweeper, the client — cannot drift on
+ * field names. A second decoder somewhere else is how a producer ends up emitting `exitCode` while a
+ * consumer reads `exit_code`.
  */
-func marshalEntry(e Entry) ([]byte, error) { return json.Marshal(e) }
-
 func unmarshalEntry(raw string, e *Entry) error { return json.Unmarshal([]byte(raw), e) }
+
+// marshalEntry exists for the sweeper's compare-and-set, which needs the bytes to hand to KVCas
+// rather than a value to write through the store.
+func marshalEntry(e Entry) ([]byte, error) { return json.Marshal(e) }
 
 /**
  * Start records a job as running and returns the handle that renews it.
@@ -220,15 +214,12 @@ func (h *Handle) stop() {
 
 // Get reads one entry.
 func (r *Registry) Get(ctx context.Context, tenant, session, jobID string) (Entry, bool, error) {
-	raw, err := r.bus.KVGet(ctx, r.bucket, Key(tenant, session, jobID))
-	if err != nil || raw == "" {
-		return Entry{}, false, nil
-	}
 	var e Entry
-	if err := unmarshalEntry(raw, &e); err != nil {
+	ok, err := r.kv.Get(ctx, r.bucket, Key(tenant, session, jobID), &e)
+	if err != nil {
 		return Entry{}, false, err
 	}
-	return e, true, nil
+	return e, ok, nil
 }
 
 /**
@@ -264,7 +255,7 @@ func (r *Registry) Put(ctx context.Context, e Entry) error {
  * guess how long to wait.
  */
 func (r *Registry) Watch(ctx context.Context, tenant, session string) (<-chan KvEvent, func(), error) {
-	ch, cancel, err := r.bus.KvWatch(ctx, r.bucket, SessionPrefix(tenant, session))
+	ch, cancel, err := r.kv.Watch(ctx, r.bucket, SessionPrefix(tenant, session))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -272,7 +263,7 @@ func (r *Registry) Watch(ctx context.Context, tenant, session string) (<-chan Kv
 	go func() {
 		defer close(out)
 		for ev := range ch {
-			mine := KvEvent{Deleted: ev.Deleted, SnapshotDone: ev.Done}
+			mine := KvEvent{Deleted: ev.Deleted, SnapshotDone: ev.SnapshotDone}
 			// A KEY WE CANNOT PARSE IS SKIPPED, not fatal: another version of this code
 			// may have written the entry, and taking the whole watch down would hide
 			// every other job in the list because of one row it did not recognise.

@@ -67,7 +67,7 @@ func (s *Sweeper) sweep(ctx context.Context) {
 	 * read, and a job whose owner died was never recorded as lost: it simply vanished when its TTL
 	 * lapsed, which is the one outcome this whole mechanism exists to prevent.
 	 */
-	ch, cancel, err := s.reg.bus.KvWatch(ctx, s.reg.bucket, ">")
+	ch, cancel, err := s.reg.kv.Watch(ctx, s.reg.bucket, ">")
 	if err != nil {
 		slog.WarnContext(ctx, "job: sweep cannot read the bucket", "svc", "job", "err", err)
 		return
@@ -87,7 +87,7 @@ func (s *Sweeper) sweep(ctx context.Context) {
 			// THE SNAPSHOT IS THE WHOLE STATE; once it ends, this sweep is done. Live
 			// events describe changes that are not this sweep's business — the next
 			// tick will see them.
-			if ev.Done {
+			if ev.SnapshotDone {
 				return
 			}
 			if ev.Deleted || ev.Value == "" {

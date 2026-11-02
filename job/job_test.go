@@ -35,15 +35,29 @@ func TestSeveralRenewalsFitInsideOneLifetime(t *testing.T) {
 	}
 }
 
-func TestFinishedEntriesOutliveRunningOnes(t *testing.T) {
+/**
+ * BOTH LIFETIMES ARE THE SAME, BECAUSE THE STORE HAS ONE.
+ *
+ * NATS KV's TTL is a bucket setting applied once at creation, and Update resets it to that same value —
+ * a per-key lifetime cannot be expressed. So the two constants are equal deliberately.
+ *
+ * THE OLD TEST ASSERTED Done > Running AND WOULD NOW FAIL, which is why it is replaced rather than
+ * deleted: the thing worth pinning is the ROLE SPLIT. Liveness is RenewedAt against StaleAfter; the TTL
+ * is only when the store forgets. A short running TTL — the previous 60 seconds — deleted the entry
+ * before the sweeper could record it as lost, which is the outcome that mechanism exists to prevent.
+ */
+func TestBothLifetimesMatchTheOneBucketTTL(t *testing.T) {
 	r := NewRegistry(nil)
-	// A FINISHED JOB IS HISTORY, A RUNNING ONE IS STATE. The first is worth reading for
-	// a day; the second is worth exactly as long as somebody keeps saying it is alive.
-	if r.DoneTTL <= r.RunningTTL {
-		t.Fatalf("finished TTL %v must exceed running TTL %v", r.DoneTTL, r.RunningTTL)
+	if r.RunningTTL != r.DoneTTL {
+		t.Fatalf("running %v and finished %v differ; a single bucket cannot honour both", r.RunningTTL, r.DoneTTL)
 	}
 	if r.DoneTTL != 24*time.Hour {
-		t.Fatalf("finished TTL is %v, and the product decision is 24h", r.DoneTTL)
+		t.Fatalf("TTL is %v, and the product decision is 24h", r.DoneTTL)
+	}
+	// AND IT MUST DWARF THE STALENESS THRESHOLD, or the sweeper would be judging an entry the store has
+	// already dropped.
+	if r.RunningTTL < 100*r.StaleAfter {
+		t.Fatalf("TTL %v leaves too little room above the %v staleness threshold", r.RunningTTL, r.StaleAfter)
 	}
 }
 
