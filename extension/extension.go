@@ -65,17 +65,6 @@ type ToolSpec struct {
 	// understands. The tool therefore calls perm.Require itself with the target it
 	// resolves; that second check is the real boundary.
 	Requires []string
-	// ReadOnly declares that this tool does not change anything — it only looks.
-	//
-	// IT EXISTS SO THE TURN LOOP CAN RUN SEVERAL OF THESE AT ONCE. Every tool used to run
-	// strictly in model order because a side-effecting one must not be overtaken; that is
-	// true, but it is a property of the TOOL, not of the scheduler, and applying it to reads
-	// made a step with three lookups cost three round trips for no reason.
-	//
-	// The default is false on purpose: forgetting to declare a read costs latency, while
-	// forgetting to declare a WRITE would let one run concurrently with another and reorder
-	// effects. Safety by default, speed by declaration.
-	ReadOnly bool
 	Execute  func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
 }
 
@@ -349,10 +338,6 @@ func New(b bus.Bus, cfg Config) *Extension {
 				InputSchema:    easybus.Struct(spec.InputSchema),
 				RequiredConfig: spec.RequiredConfig,
 				Requires:       spec.Requires,
-			}
-			if spec.ReadOnly {
-				ro := true
-				t.ReadOnly = &ro
 			}
 			if spec.Namespace != "" {
 				ns := spec.Namespace
