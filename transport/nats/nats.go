@@ -232,6 +232,9 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 type ReplicaAuditor interface {
 	AuditReplicas() ([]ReplicaAudit, error)
 }
+
+// ReplicaAudit is one JetStream object whose replica count differs from what the bus asked for.
+type ReplicaAudit struct {
 	// Kind is "stream" or "bucket".
 	Kind string
 	// Name is the stream or bucket name.
