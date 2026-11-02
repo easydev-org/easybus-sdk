@@ -146,7 +146,7 @@ func TestKeySegmentsOrderFromGeneralToSpecific(t *testing.T) {
 	if got != want {
 		t.Fatalf("Key = %q, want %q", got, want)
 	}
-	if prefix := SessionPrefix("alice", "s1"); prefix != "t.alice.s.s1.*" {
+	if prefix := SessionPrefix("alice", "s1"); prefix != "t.alice.s.s1.>" {
 		t.Fatalf("SessionPrefix = %q", prefix)
 	}
 }

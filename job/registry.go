@@ -84,9 +84,17 @@ func Key(tenant, session, jobID string) string {
 	return fmt.Sprintf("t.%s.s.%s.%s", tenant, session, jobID)
 }
 
-// SessionPrefix is the wildcard for one conversation's jobs.
+/**
+ * SessionPrefix is the wildcard for one conversation's jobs.
+ *
+ * IT ENDS IN `>`, NOT `*`, AND THAT IS THE WHOLE POINT. NATS subject wildcards are per TOKEN: `*`
+ * matches exactly one, `>` matches one or more of the remaining. A job id contains dots —
+ * `sandbox-job.392f82df` — so `t.<tenant>.s.<session>.*` matched the `sandbox-job` token and then
+ * expected the subject to end, which it does not. The watch was live, the jobs were written, and the
+ * list came back empty.
+ */
 func SessionPrefix(tenant, session string) string {
-	return fmt.Sprintf("t.%s.s.%s.*", tenant, session)
+	return fmt.Sprintf("t.%s.s.%s.>", tenant, session)
 }
 
 // put writes an entry with a TTL.

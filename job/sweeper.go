@@ -61,7 +61,13 @@ func (s *Sweeper) sweep(ctx context.Context) {
 	// THE WATCH GIVES THE CURRENT STATE, which is why a sweep is a short-lived watch
 	// rather than a separate list operation: the bucket already has one way to read
 	// everything, and inventing a second would mean two places to keep correct.
-	ch, cancel, err := s.reg.bus.KvWatch(ctx, s.reg.bucket, "*")
+	/**
+	 * `>` AND NOT `*`. A job key has five tokens — `t.<tenant>.s.<session>.<id>` — so `*` matched the
+	 * first token only and the watch saw NOTHING. The sweeper was running, on a bucket it could not
+	 * read, and a job whose owner died was never recorded as lost: it simply vanished when its TTL
+	 * lapsed, which is the one outcome this whole mechanism exists to prevent.
+	 */
+	ch, cancel, err := s.reg.bus.KvWatch(ctx, s.reg.bucket, ">")
 	if err != nil {
 		slog.WarnContext(ctx, "job: sweep cannot read the bucket", "svc", "job", "err", err)
 		return
