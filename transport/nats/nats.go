@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,16 @@ type Bus struct {
 	// nil means "no persistent backend configured" and the persistent methods FAIL. See
 	// ErrNoDurableObjectStore.
 	durable bus.ObjectStore
+	// replicas is the JetStream replica count for KV and object buckets created by this bus.
+	//
+	// STREAMS GET THIS FROM Options DIRECTLY (see ensureStreams). KV BUCKETS DID NOT, and that was a
+	// real gap: a deployment could ask for Replicas:3, get an R3 mailbox stream, and still have every
+	// KV bucket — mailbox, jobs, denials, cfg — created at R1 because kvStore hard-coded the config.
+	// The replication guarantee was therefore true for the log streams and false for the queues, which
+	// is the opposite of what an operator would assume.
+	//
+	// Zero keeps the historical behaviour (server default). Cannot change after a bucket is created.
+	replicas int
 }
 
 // ErrNoDurableObjectStore is returned by the persistent object methods when no durable backend is
@@ -129,7 +140,7 @@ func ConnectWithOptions(url string, opts Options) (*Bus, error) {
 		nc.Close()
 		return nil, err
 	}
-	return &Bus{nc: nc, js: js, idn: opts.Identity, durable: opts.DurableObjects}, nil
+	return &Bus{nc: nc, js: js, idn: opts.Identity, durable: opts.DurableObjects, replicas: opts.Replicas}, nil
 }
 
 // ensureStreams reconciles the mailbox/events/dlq streams. Order matters:
@@ -209,6 +220,96 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 		}
 	}
 	return nil
+}
+
+// ReplicaAuditor is the optional capability a transport exposes when it can report replica counts.
+//
+// AN OPTIONAL INTERFACE rather than a method on bus.Bus: replication is a NATS/JetStream concept, and
+// the same Bus interface is implemented by in-memory and test transports where the question does not
+// apply. Adding it to Bus would force every implementation to answer a question it cannot.
+//
+// The transport that has it is transport/nats.Bus.
+type ReplicaAuditor interface {
+	AuditReplicas() ([]ReplicaAudit, error)
+}
+
+// ReplicaAudit is one JetStream object whose replica count differs from what the bus asked for.
+type ReplicaAudit struct {
+	// Kind is "stream" or "bucket".
+	Kind string
+	// Name is the stream or bucket name.
+	Name string
+	// Have is the replica count the object actually has.
+	Have int
+	// Want is the count this bus was configured with (Options.Replicas).
+	Want int
+}
+
+func (a ReplicaAudit) String() string {
+	return fmt.Sprintf("%s %s has %d replica(s), wanted %d", a.Kind, a.Name, a.Have, a.Want)
+}
+
+// AuditReplicas reports every stream and KV/object bucket whose replica count is BELOW what this
+// bus was asked for.
+//
+// WHY THIS EXISTS AT ALL: `Options.Replicas` is only honoured when an object is CREATED. A deployment
+// that raises the setting does not raise anything already on disk — JetStream stores the replica count
+// in the object's config and the client cannot change it after creation. So "I asked for R3" and "I
+// have R3" silently disagree, and the disagreement is invisible until a broker dies and the data that
+// was supposed to be replicated turns out not to be.
+//
+// The caller decides what to do with the result (log, refuse to start, alert). This method only
+// answers the question honestly, which is what was missing.
+//
+// A bus with no replica requirement (Options.Replicas == 0) reports nothing: it never promised
+// redundancy, so there is nothing to be wrong about.
+func (b *Bus) AuditReplicas() ([]ReplicaAudit, error) {
+	if b.replicas <= 0 {
+		return nil, nil
+	}
+	var out []ReplicaAudit
+
+	// Streams the bus itself manages. A missing one is not an audit failure — it simply has not been
+	// created yet, and will be created with the right count.
+	for _, name := range []string{streamMailbox, streamEvents, streamDLQ, streamChannels} {
+		info, err := b.js.StreamInfo(name)
+		if err != nil {
+			if errors.Is(err, nats.ErrStreamNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("audit stream %s: %w", name, err)
+		}
+		if info.Config.Replicas != b.replicas {
+			out = append(out, ReplicaAudit{Kind: "stream", Name: name, Have: info.Config.Replicas, Want: b.replicas})
+		}
+	}
+
+	// KV buckets are streams named KV_<bucket>; the object store is OBJ_<bucket>. Enumerating via the
+	// stream list is the only way to see them without knowing every bucket name up front, and knowing
+	// them here would be a second list that drifts from the callers.
+	names := b.js.StreamNames()
+	for name := range names {
+		if !strings.HasPrefix(name, "KV_") && !strings.HasPrefix(name, "OBJ_") {
+			continue
+		}
+		// The four log streams were handled above with their own names.
+		info, err := b.js.StreamInfo(name)
+		if err != nil {
+			continue // deleted between listing and lookup
+		}
+		if info.Config.Replicas != b.replicas {
+			out = append(out, ReplicaAudit{Kind: "bucket", Name: strings.TrimPrefix(strings.TrimPrefix(name, "KV_"), "OBJ_"), Have: info.Config.Replicas, Want: b.replicas})
+		}
+	}
+
+	// Stable order, so two audits of the same cluster read the same.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
 }
 
 // signMsg attaches the identity HMAC to a NATS message's headers (opt-in;
@@ -709,14 +810,23 @@ func (b *Bus) InboxPurge(ctx context.Context, ch string) error {
 	return nil
 }
 
-func (b *Bus) ObjectPut(ctx context.Context, name string, data []byte) error {
-	os, err := b.js.CreateObjectStore(&nats.ObjectStoreConfig{Bucket: objectBucket, TTL: 24 * 3600 * 1e9})
+func (b *Bus) objectStore() (nats.ObjectStore, error) {
+	cfg := &nats.ObjectStoreConfig{Bucket: objectBucket, TTL: 24 * 3600 * 1e9}
+	if b.replicas > 0 {
+		cfg.Replicas = b.replicas
+	}
+	os, err := b.js.CreateObjectStore(cfg)
 	if err != nil {
 		// Bucket exists (possibly with another config) — open it.
-		os, err = b.js.ObjectStore(objectBucket)
-		if err != nil {
-			return err
-		}
+		return b.js.ObjectStore(objectBucket)
+	}
+	return os, nil
+}
+
+func (b *Bus) ObjectPut(ctx context.Context, name string, data []byte) error {
+	os, err := b.objectStore()
+	if err != nil {
+		return err
 	}
 	_, err = os.PutBytes(name, data)
 	return err
@@ -748,8 +858,19 @@ func (b *Bus) ObjectGetPersistent(ctx context.Context, name string) ([]byte, err
 // kvStore creates-or-opens a KV bucket. CreateKeyValue errors when the
 // bucket exists with a different config (e.g. a different per-call TTL), so
 // fall back to opening the existing bucket.
+//
+// THE REPLICA COUNT IS APPLIED AT CREATION ONLY, because that is the only time JetStream accepts it:
+// a bucket's replica count is part of its stream config and cannot be raised later through this API.
+// A bus configured for Replicas:3 therefore only guarantees R3 for buckets it CREATES; an existing R1
+// bucket is opened as-is and stays R1. That asymmetry is reported rather than hidden — see
+// checkReplicas — because "the deployment asked for three copies and got one" is exactly the kind of
+// silent difference an operator needs to see.
 func (b *Bus) kvStore(bucket string, ttlMs int64) (nats.KeyValue, error) {
-	kv, err := b.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Duration(ttlMs) * time.Millisecond})
+	cfg := &nats.KeyValueConfig{Bucket: bucket, TTL: time.Duration(ttlMs) * time.Millisecond}
+	if b.replicas > 0 {
+		cfg.Replicas = b.replicas
+	}
+	kv, err := b.js.CreateKeyValue(cfg)
 	if err != nil {
 		return b.js.KeyValue(bucket)
 	}

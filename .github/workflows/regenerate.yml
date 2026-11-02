@@ -1,0 +1,85 @@
+name: regenerate
+
+# Regenerates `gen/` from `proto/` INSIDE CI, and commits the result back to the branch that is
+# being built.
+#
+# WHY THIS EXISTS ONTOP OF codegen.yml: codegen.yml runs only on `main`, so a pull request that
+# changes the proto cannot compile — `gen/` is stale until after the merge, and `ci.yml` correctly
+# fails on `TestGeneratedCodeMatchesProto`. That is a good check and a bad workflow: the author has to
+# merge something that does not build.
+#
+# This closes the loop for a PR: generation needs buf + protoc-gen-go, which is exactly the kind of
+# thing a reviewed CI run should do rather than a contributor's laptop.
+#
+# IT COMMITS RATHER THAN FAILING so the branch becomes buildable without a second round trip, and the
+# generated diff stays visible in the PR like any other change — a teammate can still see that the
+# wire format moved.
+#
+# IT ONLY TOUCHES `gen/`. A workflow that regenerated and then "fixed" hand-written code would be
+# hiding a real disagreement.
+on:
+  pull_request:
+    paths:
+      - 'proto/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regenerate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    # A fork cannot be pushed to with the repo token, so skip rather than fail red. The contributor
+    # runs the documented command instead; `ci.yml` still tells them the output is stale.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR's branch, not the merge ref: the commit has to land where the author can see it.
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # PINNED, for the same reason codegen.yml pins them: @latest would let a generator major
+      # rewrite the whole file and make the real contract change unreadable in the diff.
+      - name: Install protoc-gen-go
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.5
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate
+        run: |
+          set -euo pipefail
+          # `bash`, not `./generate.sh`: the committed script has no executable bit, and relying on
+          # one would make this workflow depend on a file mode rather than on the script's content.
+          bash generate.sh
+
+      - name: Commit if the output changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- gen/; then
+            echo "gen/ already matches proto/ — nothing to commit"
+            exit 0
+          fi
+          git --no-pager diff --stat -- gen/
+          git config user.name  "easyagent"
+          git config user.email "agent@easyagent.local"
+          git add gen/
+          git commit -m "codegen: regenerate gen/ from protocol.proto
+
+          Produced by .github/workflows/regenerate.yml in CI — no hand edits.
+          Review the PROTO diff; this file is a consequence of it."
+          git push
