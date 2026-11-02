@@ -131,15 +131,40 @@ type Entry struct {
 	Reason string `json:"reason,omitempty"`
 
 	/**
-	 * Cancelable says whether cancelling this job can do anything.
+	 * CancelMode says how — or whether — cancelling this job can do anything.
 	 *
-	 * IT IS NOT "WHETHER THE JOB IS RUNNING" — a running job may still be uncancellable. A CI run
-	 * submitted to somebody else's system can only be ASKED to stop; a build in a queue has not
-	 * started; a process on a machine this extension cannot reach has no signal to receive.
+	 * THREE VALUES BECAUSE TWO FACTS ARE NOT THE SAME. A process this extension owns can be KILLED;
+	 * a run submitted to somebody else's system can only be ASKED to stop, and that request may be
+	 * declined or may take a step to take effect. A caller that treats both as "cancel" will believe
+	 * a CI run stopped when it is merely stopping.
 	 *
-	 * A CLIENT USES IT TO DECIDE WHETHER TO OFFER THE ACTION AT ALL. Drawing a cancel button beside
-	 * a job that cannot be cancelled teaches the reader that the button does not work, which is
-	 * worse than not drawing it.
+	 * IT IS A PROPERTY OF THE KIND OF JOB, NOT OF ITS STATE. A running job may still be uncancellable
+	 * — a build sitting in a queue has not started and has nothing to stop.
 	 */
-	Cancelable bool `json:"cancelable,omitempty"`
+	CancelMode CancelMode `json:"cancelMode,omitempty"`
 }
+
+// CancelMode is how a job can be stopped.
+type CancelMode string
+
+const (
+	// CancelKill means this extension owns the process and can end it: the signal lands, and the
+	// answer to "did it stop" is the answer to the call.
+	CancelKill CancelMode = "kill"
+	/**
+	 * CancelRequest means the work belongs to a system that has to be ASKED.
+	 *
+	 * A GITHUB RUN IS THIS: cancelling sets a flag, and the step in progress finishes before the
+	 * run stops. A caller told "cancelled" here would believe the machine had stopped, when what it
+	 * has is a request in flight — which is why the mode travels with the job rather than being
+	 * flattened into a boolean.
+	 */
+	CancelRequest CancelMode = "request"
+	// CancelNone means there is nothing to stop: the work has not started, or it runs somewhere
+	// this extension cannot reach. Empty so a zero value is the honest default — a job that did not
+	// say it can be cancelled cannot be.
+	CancelNone CancelMode = ""
+)
+
+// Cancelable reports whether cancelling is worth attempting.
+func (m CancelMode) Cancelable() bool { return m == CancelKill || m == CancelRequest }

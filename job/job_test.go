@@ -94,6 +94,50 @@ func TestDoneDoesNotDistinguishSuccessFromFailure(t *testing.T) {
 	}
 }
 
+/**
+ * TWO KINDS OF CANCELLING, BECAUSE THEY ARE TWO DIFFERENT FACTS.
+ *
+ * `kill` ends a process this extension owns: the signal lands and the call's answer is the answer.
+ * `request` asks somebody else's system to stop, and that system may decline or take a step to
+ * comply. A caller told only "cancel" would believe a CI run had stopped when it is merely stopping.
+ */
+func TestCancelModesAreDistinct(t *testing.T) {
+	if CancelKill == CancelRequest {
+		t.Fatal("kill and request must not share a value; they promise different things")
+	}
+	if !CancelKill.Cancelable() || !CancelRequest.Cancelable() {
+		t.Fatal("both kill and request are worth attempting")
+	}
+	// THE ZERO VALUE IS THE HONEST DEFAULT: a job that did not say it can be cancelled cannot be.
+	var unset CancelMode
+	if unset != CancelNone {
+		t.Fatalf("the zero CancelMode is %q, not CancelNone", unset)
+	}
+	if unset.Cancelable() {
+		t.Fatal("an unset cancel mode must not offer cancellation")
+	}
+	if (CancelMode("something-new")).Cancelable() {
+		t.Fatal("an unrecognised mode must not offer cancellation")
+	}
+}
+
+func TestEntryCarriesItsCancelMode(t *testing.T) {
+	// THE MODE SURVIVES THE WIRE, which is the only way a client can decide whether to draw a
+	// cancel button. A json tag typo would silently make every job look uncancellable.
+	in := Entry{ID: "ci-run.7", CancelMode: CancelRequest}
+	raw, err := marshalEntry(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Entry
+	if err := unmarshalEntry(string(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.CancelMode != CancelRequest {
+		t.Fatalf("cancel mode came back as %q", out.CancelMode)
+	}
+}
+
 func TestKeySegmentsOrderFromGeneralToSpecific(t *testing.T) {
 	// THE ORDER IS WHAT MAKES A WILDCARD USEFUL: a panel asks for one conversation, a
 	// sweeper asks for one tenant, and both are prefixes of the same shape.
