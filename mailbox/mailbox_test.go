@@ -10,13 +10,11 @@ import (
 	"github.com/easydev-org/easybus-sdk/bus"
 )
 
-/**
- * THE QUEUE MAY DELIVER TWICE, AND THAT IS THE DESIGN.
- *
- * A table could promise exactly-once by marking and fetching in one transaction. A KV bucket cannot, so
- * the promise moves to the fold, which is idempotent by message id. These tests pin what the queue must
- * still guarantee: a message is never LOST, and a consumed one stays readable.
- */
+// THE QUEUE MAY DELIVER TWICE, AND THAT IS THE DESIGN.
+//
+// A table could promise exactly-once by marking and fetching in one transaction. A KV bucket cannot, so
+// the promise moves to the fold, which is idempotent by message id. These tests pin what the queue must
+// still guarantee: a message is never LOST, and a consumed one stays readable.
 
 // fakeKV is an in-memory bucket; every entry carries a TTL so the two lifetimes can be asserted.
 type fakeKV struct {
@@ -41,12 +39,10 @@ func (f *fakeKV) KVPut(_ context.Context, _, key, value string, ttl int64) error
 	return nil
 }
 
-/**
- * KVCas REPORTS A LOST RACE AS (0, nil), which is the contract the real bus has.
- *
- * REPRODUCING IT IS THE POINT: a fake that always won would make the drain look exactly-once while the
- * real one delivered twice, and the test would pass on the bug.
- */
+// KVCas REPORTS A LOST RACE AS (0, nil), which is the contract the real bus has.
+//
+// REPRODUCING IT IS THE POINT: a fake that always won would make the drain look exactly-once while the
+// real one delivered twice, and the test would pass on the bug.
 func (f *fakeKV) KVCas(_ context.Context, _, key, value string, revision int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -71,12 +67,10 @@ func (f *fakeKV) KVDelete(_ context.Context, _, key string) error {
 	return nil
 }
 
-/**
- * KvWatch DELIVERS A SNAPSHOT THEN THE BOUNDARY, and stops — which is all List needs.
- *
- * THE BOUNDARY MATTERS even in a fake: List loops until SnapshotDone, so a fake that never sends it
- * would hang the test rather than fail it, and a hang reads as a slow machine.
- */
+// KvWatch DELIVERS A SNAPSHOT THEN THE BOUNDARY, and stops — which is all List needs.
+//
+// THE BOUNDARY MATTERS even in a fake: List loops until SnapshotDone, so a fake that never sends it
+// would hang the test rather than fail it, and a hang reads as a slow machine.
 func (f *fakeKV) KvWatch(ctx context.Context, _, pattern string) (<-chan bus.KvEvent, func(), error) {
 	f.mu.Lock()
 	keys := make([]string, 0, len(f.data))
@@ -144,12 +138,10 @@ func TestEnqueueThenDrain(t *testing.T) {
 	}
 }
 
-/**
- * A CONSUMED MESSAGE STAYS READABLE.
- *
- * Deleting on read would make the queue a black hole: nobody could answer "did the thing I sent get
- * picked up". It stays for a day, with a shorter lifetime than a pending one, and Page still shows it.
- */
+// A CONSUMED MESSAGE STAYS READABLE.
+//
+// Deleting on read would make the queue a black hole: nobody could answer "did the thing I sent get
+// picked up". It stays for a day, with a shorter lifetime than a pending one, and Page still shows it.
 func TestConsumedMessagesRemainVisible(t *testing.T) {
 	kv := newFakeKV()
 	q := New(kv)
@@ -215,10 +207,8 @@ func TestPendingIsOldestFirst(t *testing.T) {
 	}
 }
 
-/**
- * THE BOOT BACKSTOP DEPENDS ON THIS: after a restart somebody must find the sessions whose messages
- * arrived while nothing was running. It is the one thing the old table did with a GROUP BY.
- */
+// THE BOOT BACKSTOP DEPENDS ON THIS: after a restart somebody must find the sessions whose messages
+// arrived while nothing was running. It is the one thing the old table did with a GROUP BY.
 func TestSessionsWithPendingFindsTheRightConversations(t *testing.T) {
 	q := New(newFakeKV())
 	ctx := context.Background()
@@ -248,12 +238,10 @@ func TestSessionsWithPendingFindsTheRightConversations(t *testing.T) {
 	}
 }
 
-/**
- * A SESSION NAME WITH A DOT SURVIVES THE ROUND TRIP.
- *
- * sessionstore escapes it into one key token; the backstop has to unescape it back, or it would try to
- * wake a session named `a` rather than `a.b` — and find nothing.
- */
+// A SESSION NAME WITH A DOT SURVIVES THE ROUND TRIP.
+//
+// sessionstore escapes it into one key token; the backstop has to unescape it back, or it would try to
+// wake a session named `a` rather than `a.b` — and find nothing.
 func TestSessionsWithPendingUnescapesTheSessionName(t *testing.T) {
 	q := New(newFakeKV())
 	ctx := context.Background()
@@ -284,16 +272,14 @@ func TestInterruptIsDetected(t *testing.T) {
 	}
 }
 
-/**
- * TWO DRAINS RACING MUST NOT BOTH DELIVER THE SAME MESSAGE.
- *
- * THIS IS THE WHOLE REASON Drain USES COMPARE-AND-SWAP. Two replicas can list the same pending rows and
- * both decide to consume them; with a plain write the second overwrites the first and the turn runs twice
- * on one prompt. The CAS makes the list a race with exactly one winner.
- *
- * The fake reports a lost race as (0, nil) — the real bus's contract — so this test fails if the claim
- * ever goes back to being a put.
- */
+// TWO DRAINS RACING MUST NOT BOTH DELIVER THE SAME MESSAGE.
+//
+// THIS IS THE WHOLE REASON Drain USES COMPARE-AND-SWAP. Two replicas can list the same pending rows and
+// both decide to consume them; with a plain write the second overwrites the first and the turn runs twice
+// on one prompt. The CAS makes the list a race with exactly one winner.
+//
+// The fake reports a lost race as (0, nil) — the real bus's contract — so this test fails if the claim
+// ever goes back to being a put.
 func TestRacingDrainsDeliverEachMessageOnce(t *testing.T) {
 	q := New(newFakeKV())
 	ctx := context.Background()
@@ -341,13 +327,11 @@ func TestRacingDrainsDeliverEachMessageOnce(t *testing.T) {
 	}
 }
 
-/**
- * A CLAIM THAT CANNOT BE ARRIVED AT IS NOT AN ERROR — the message stays pending for the next drain.
- *
- * This is the crash case: a replica that dies mid-drain leaves its unclaimed messages pending, and the
- * next drain takes them. Losing them would be worse than delivering twice, and claiming them makes it
- * impossible to have both.
- */
+// A CLAIM THAT CANNOT BE ARRIVED AT IS NOT AN ERROR — the message stays pending for the next drain.
+//
+// This is the crash case: a replica that dies mid-drain leaves its unclaimed messages pending, and the
+// next drain takes them. Losing them would be worse than delivering twice, and claiming them makes it
+// impossible to have both.
 func TestAFailedClaimLeavesTheMessagePending(t *testing.T) {
 	kv := newFakeKV()
 	q := New(kv)

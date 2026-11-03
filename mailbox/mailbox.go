@@ -26,22 +26,20 @@ import (
 // DefaultBucket is where undelivered and recently-consumed messages live.
 const DefaultBucket = "mailbox"
 
-/**
- * ONE LIFETIME FOR BOTH STATES, BECAUSE NATS KV HAS ONE.
- *
- * ITS TTL IS A BUCKET SETTING — applied once at creation, and reset to that same value by Update — so a
- * pending message and a consumed one cannot expire on different clocks. Writing 7 days for the queue and
- * 24 hours for the receipt looked right and was not expressible.
- *
- * THE ROLE SPLIT IS WHAT MAKES ONE NUMBER ENOUGH. `Status` says whether a message has been taken; the
- * TTL only says when the store forgets it. A day is long enough for somebody to check that what they
- * sent was picked up, and long enough that a conversation nobody is running still has its messages when
- * it wakes — which is the case this window actually has to cover, since a trigger left unread does not
- * need a week if its session is dormant for a week either.
- *
- * A MESSAGE THAT MUST OUTLIVE THE BUCKET NEEDS A DIFFERENT STORE, not a longer TTL: once the key is gone,
- * nothing distinguishes "nobody looked" from "nothing was sent".
- */
+// ONE LIFETIME FOR BOTH STATES, BECAUSE NATS KV HAS ONE.
+//
+// ITS TTL IS A BUCKET SETTING — applied once at creation, and reset to that same value by Update — so a
+// pending message and a consumed one cannot expire on different clocks. Writing 7 days for the queue and
+// 24 hours for the receipt looked right and was not expressible.
+//
+// THE ROLE SPLIT IS WHAT MAKES ONE NUMBER ENOUGH. `Status` says whether a message has been taken; the
+// TTL only says when the store forgets it. A day is long enough for somebody to check that what they
+// sent was picked up, and long enough that a conversation nobody is running still has its messages when
+// it wakes — which is the case this window actually has to cover, since a trigger left unread does not
+// need a week if its session is dormant for a week either.
+//
+// A MESSAGE THAT MUST OUTLIVE THE BUCKET NEEDS A DIFFERENT STORE, not a longer TTL: once the key is gone,
+// nothing distinguishes "nobody looked" from "nothing was sent".
 const TTL = 24 * time.Hour
 
 // TTLMs is TTL in the unit the bus takes, exported so callers stop re-deriving it.
@@ -69,12 +67,10 @@ type Queue struct{ kv *sessionstore.Store }
 // New returns a queue over the given bus.
 func New(b bus.Bus) *Queue { return &Queue{kv: sessionstore.New(b)} }
 
-/**
- * Enqueue adds a message.
- *
- * THE ID COMES FROM THE PRODUCER when it has one, so a redelivery by a publisher that retried lands on
- * the same key and replaces itself rather than arriving twice. An empty id is minted here.
- */
+// Enqueue adds a message.
+//
+// THE ID COMES FROM THE PRODUCER when it has one, so a redelivery by a publisher that retried lands on
+// the same key and replaces itself rather than arriving twice. An empty id is minted here.
 func (q *Queue) Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error) {
 	if id == "" {
 		id = newID()
@@ -86,20 +82,18 @@ func (q *Queue) Enqueue(ctx context.Context, tenant, session, id, typ string, pa
 	return id, q.kv.Put(ctx, DefaultBucket, sessionstore.Key(tenant, session, id), m, TTL)
 }
 
-/**
- * Drain takes every pending message for one session, oldest first, CLAIMING each by compare-and-swap.
- *
- * THE CLAIM IS WHAT MAKES DELIVERY EXACTLY-ONCE, and it cannot be a plain write. Two replicas can both
- * list the same pending rows and both decide to consume them; with a put, the second overwrites the
- * first and the message is delivered twice. The CAS makes the list a race with one winner: a lost swap
- * means somebody else already took it, so this caller skips it rather than delivering it again.
- *
- * A MESSAGE IS MARKED, NOT DELETED — it stays readable for TTL so a UI can answer "did my
- * message get picked up". Deleting on read would make the queue a black hole.
- *
- * A CRASH MID-DRAIN LEAVES THE REST PENDING, which the next drain takes. Nothing is lost, and nothing
- * that was claimed is claimed twice.
- */
+// Drain takes every pending message for one session, oldest first, CLAIMING each by compare-and-swap.
+//
+// THE CLAIM IS WHAT MAKES DELIVERY EXACTLY-ONCE, and it cannot be a plain write. Two replicas can both
+// list the same pending rows and both decide to consume them; with a put, the second overwrites the
+// first and the message is delivered twice. The CAS makes the list a race with one winner: a lost swap
+// means somebody else already took it, so this caller skips it rather than delivering it again.
+//
+// A MESSAGE IS MARKED, NOT DELETED — it stays readable for TTL so a UI can answer "did my
+// message get picked up". Deleting on read would make the queue a black hole.
+//
+// A CRASH MID-DRAIN LEAVES THE REST PENDING, which the next drain takes. Nothing is lost, and nothing
+// that was claimed is claimed twice.
 func (q *Queue) Drain(ctx context.Context, tenant, session string) ([]Message, error) {
 	rows, err := q.kv.List(ctx, DefaultBucket, sessionstore.Prefix(tenant, session))
 	if err != nil {
@@ -162,12 +156,10 @@ func (q *Queue) Pending(ctx context.Context, tenant, session string) ([]Message,
 	return out, nil
 }
 
-/**
- * Page returns one conversation's messages, newest first.
- *
- * IT IS A SNAPSHOT, NOT A STREAM. A mailbox UI reads a page and offers a refresh; a caller that wants
- * changes under it should watch the bucket.
- */
+// Page returns one conversation's messages, newest first.
+//
+// IT IS A SNAPSHOT, NOT A STREAM. A mailbox UI reads a page and offers a refresh; a caller that wants
+// changes under it should watch the bucket.
 func (q *Queue) Page(ctx context.Context, tenant, session string) ([]Message, error) {
 	msgs, err := q.list(ctx, tenant, session)
 	if err != nil {
@@ -177,17 +169,15 @@ func (q *Queue) Page(ctx context.Context, tenant, session string) ([]Message, er
 	return msgs, nil
 }
 
-/**
- * SessionsWithPending lists the conversations that have work waiting.
- *
- * THIS IS THE ONE OPERATION THE OLD TABLE DID WITH A GROUP BY, and it is the reason the boot backstop
- * exists: after a restart, somebody has to find the sessions whose messages arrived while nothing was
- * running. It scans the whole bucket, which is affordable at this size and would not be at a large one —
- * the cost of no longer having an index.
- *
- * TYPES NARROW IT to the messages that actually wake a turn, so a bucket full of consumed rows does not
- * produce a boot-time list of every session that ever did anything.
- */
+// SessionsWithPending lists the conversations that have work waiting.
+//
+// THIS IS THE ONE OPERATION THE OLD TABLE DID WITH A GROUP BY, and it is the reason the boot backstop
+// exists: after a restart, somebody has to find the sessions whose messages arrived while nothing was
+// running. It scans the whole bucket, which is affordable at this size and would not be at a large one —
+// the cost of no longer having an index.
+//
+// TYPES NARROW IT to the messages that actually wake a turn, so a bucket full of consumed rows does not
+// produce a boot-time list of every session that ever did anything.
 func (q *Queue) SessionsWithPending(ctx context.Context, types []string) ([]struct{ Tenant, SessionName string }, error) {
 	rows, err := q.kv.List(ctx, DefaultBucket, ">")
 	if err != nil {
@@ -261,13 +251,11 @@ func newID() string { return protocol.NewID() }
 // releases cannot drift on field names.
 func unmarshalMessage(raw string, m *Message) error { return json.Unmarshal([]byte(raw), m) }
 
-/**
- * parseKey recovers the tenant and session from `t.<tenant>.s.<session>.<id>`.
- *
- * BOTH ARE UNESCAPED, because sessionstore escaped them on the way in: a session called `a.b` is stored
- * as one token and must come back as the name it was, or the boot backstop would try to wake a session
- * nobody has.
- */
+// parseKey recovers the tenant and session from `t.<tenant>.s.<session>.<id>`.
+//
+// BOTH ARE UNESCAPED, because sessionstore escaped them on the way in: a session called `a.b` is stored
+// as one token and must come back as the name it was, or the boot backstop would try to wake a session
+// nobody has.
 func parseKey(key string) (tenant, session string, ok bool) {
 	parts := strings.Split(key, ".")
 	if len(parts) < 5 || parts[0] != "t" || parts[2] != "s" {

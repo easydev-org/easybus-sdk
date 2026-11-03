@@ -8,20 +8,18 @@ import (
 	"github.com/easydev-org/easybus-sdk/bus"
 )
 
-/**
- * THE HEARTBEAT HAS TO ACTUALLY WRITE.
- *
- * A create-then-put looks like it handles replacement — "if the key exists, fall through to a put" —
- * but `KVCreate` reports an existing key as `(0, nil)`, which is the normal losing side of a claim
- * race. So the conditional never fires: the entry is written once at start, every renewal is
- * discarded, and the sweeper concludes thirty seconds later that nobody is renewing.
- *
- * THE SYMPTOM IS ALMOST UNREADABLE FROM OUTSIDE: jobs appear in the list and are marked lost while
- * they are still running. Everything looks wired; the only evidence is that `RenewedAt` never moves.
- *
- * This fake counts the calls, so "did the renewal write anything" is a number rather than an
- * inference from a timestamp.
- */
+// THE HEARTBEAT HAS TO ACTUALLY WRITE.
+//
+// A create-then-put looks like it handles replacement — "if the key exists, fall through to a put" —
+// but `KVCreate` reports an existing key as `(0, nil)`, which is the normal losing side of a claim
+// race. So the conditional never fires: the entry is written once at start, every renewal is
+// discarded, and the sweeper concludes thirty seconds later that nobody is renewing.
+//
+// THE SYMPTOM IS ALMOST UNREADABLE FROM OUTSIDE: jobs appear in the list and are marked lost while
+// they are still running. Everything looks wired; the only evidence is that `RenewedAt` never moves.
+//
+// This fake counts the calls, so "did the renewal write anything" is a number rather than an
+// inference from a timestamp.
 
 // countingKV records what the registry asked it to do.
 type countingKV struct {

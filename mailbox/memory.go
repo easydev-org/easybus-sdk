@@ -8,18 +8,16 @@ import (
 	"time"
 )
 
-/**
- * Memory is a Queue that keeps everything in this process.
- *
- * IT EXISTS SO "NO QUEUE" HAS A SHAPE. A runtime handed no queue still has to answer a wake, and the
- * honest answer is an empty one — the wake finds nothing and ends, which is what an idle conversation
- * does. Installing this makes that a queue rather than a nil check at every call site, and a nil check
- * somebody forgets is a panic in the middle of a turn.
- *
- * NOT FOR PRODUCTION: messages do not survive the process and a second replica cannot see them. A
- * deployment that wires this has a queue that lies about durability, so it is for tests and in-memory
- * mode rather than a fallback.
- */
+// Memory is a Queue that keeps everything in this process.
+//
+// IT EXISTS SO "NO QUEUE" HAS A SHAPE. A runtime handed no queue still has to answer a wake, and the
+// honest answer is an empty one — the wake finds nothing and ends, which is what an idle conversation
+// does. Installing this makes that a queue rather than a nil check at every call site, and a nil check
+// somebody forgets is a panic in the middle of a turn.
+//
+// NOT FOR PRODUCTION: messages do not survive the process and a second replica cannot see them. A
+// deployment that wires this has a queue that lies about durability, so it is for tests and in-memory
+// mode rather than a fallback.
 type Memory struct {
 	mu   sync.Mutex
 	msgs map[string]Message

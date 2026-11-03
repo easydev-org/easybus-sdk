@@ -25,23 +25,19 @@ import (
 // it. Same number, different reasons — and a shared bucket would make one retention policy serve two.
 const DefaultBucket = "denials"
 
-/**
- * DefaultTTL is how long a refusal stays visible.
- *
- * A DAY, BECAUSE IT IS A REMINDER RATHER THAN A LOG. Long enough to survive "I will fix that
- * tomorrow", short enough that a permission granted this morning does not leave a stale complaint
- * sitting in the panel a month later. A refusal that matters for longer than a day is one somebody
- * should have noticed already.
- */
+// DefaultTTL is how long a refusal stays visible.
+//
+// A DAY, BECAUSE IT IS A REMINDER RATHER THAN A LOG. Long enough to survive "I will fix that
+// tomorrow", short enough that a permission granted this morning does not leave a stale complaint
+// sitting in the panel a month later. A refusal that matters for longer than a day is one somebody
+// should have noticed already.
 const DefaultTTL = 24 * time.Hour
 
-/**
- * Record is one refused capability, aggregated.
- *
- * BY CAPABILITY, NOT BY ATTEMPT. The same tool refused twenty times is one thing the reader has to
- * decide about, and twenty rows would bury it. `Count` and `LastAt` keep the repetition legible
- * without turning the list into a log.
- */
+// Record is one refused capability, aggregated.
+//
+// BY CAPABILITY, NOT BY ATTEMPT. The same tool refused twenty times is one thing the reader has to
+// decide about, and twenty rows would bury it. `Count` and `LastAt` keep the repetition legible
+// without turning the list into a log.
 type Record struct {
 	ExtID      string `json:"extId"`
 	Capability string `json:"capability"`
@@ -77,17 +73,15 @@ func SessionPrefix(tenant, session string) string {
 	return sessionstore.Prefix(tenant, session)
 }
 
-/**
- * Record notes one refusal.
-
- * IT NEVER FAILS THE CALL IT IS ABOUT. The gate has already decided to refuse; a registry that
- * returned an error here would turn "you may not do this" into "something broke", which is a worse
- * answer for everybody. Errors are the caller's to log.
- *
- * THE COUNT IS READ-MODIFY-WRITE, and a lost increment is acceptable: two refusals racing produce a
- * count off by one, and the reader is deciding whether to grant a permission, not auditing a number.
- * Making this exact would need a compare-and-set retry loop on a note nobody bills against.
- */
+// Record notes one refusal.
+//
+// IT NEVER FAILS THE CALL IT IS ABOUT. The gate has already decided to refuse; a registry that
+// returned an error here would turn "you may not do this" into "something broke", which is a worse
+// answer for everybody. Errors are the caller's to log.
+//
+// THE COUNT IS READ-MODIFY-WRITE, and a lost increment is acceptable: two refusals racing produce a
+// count off by one, and the reader is deciding whether to grant a permission, not auditing a number.
+// Making this exact would need a compare-and-set retry loop on a note nobody bills against.
 func (r *Registry) Record(ctx context.Context, tenant, session, extID, capability, tool string) error {
 	now := time.Now().UnixMilli()
 	key := Key(tenant, session, extID, capability)
@@ -123,12 +117,10 @@ func (r *Registry) List(ctx context.Context, tenant, session string) ([]Record, 
 	return out, nil
 }
 
-/**
- * Clear forgets one capability's refusals.
- *
- * CALLED WHEN THE GRANT LANDS. A refusal list that keeps complaining about a permission the reader
- * just granted is worse than no list: it teaches them the list is noise.
- */
+// Clear forgets one capability's refusals.
+//
+// CALLED WHEN THE GRANT LANDS. A refusal list that keeps complaining about a permission the reader
+// just granted is worse than no list: it teaches them the list is noise.
 func (r *Registry) Clear(ctx context.Context, tenant, session, extID, capability string) error {
 	return r.kv.Delete(ctx, r.bucket, Key(tenant, session, extID, capability))
 }

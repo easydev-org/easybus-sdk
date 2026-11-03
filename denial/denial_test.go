@@ -10,12 +10,10 @@ import (
 	"github.com/easydev-org/easybus-sdk/bus"
 )
 
-/**
- * A REFUSAL LIST IS ONLY USEFUL IF IT AGGREGATES.
- *
- * The same capability refused twenty times is ONE decision for the reader. Twenty rows would bury it,
- * and a list that buries the thing it exists to surface is worse than no list.
- */
+// A REFUSAL LIST IS ONLY USEFUL IF IT AGGREGATES.
+//
+// The same capability refused twenty times is ONE decision for the reader. Twenty rows would bury it,
+// and a list that buries the thing it exists to surface is worse than no list.
 
 // fakeKV is an in-memory bucket with the two properties that matter: a put replaces, a get returns.
 type fakeKV struct {
@@ -76,12 +74,10 @@ func TestRecordAggregatesByCapability(t *testing.T) {
 	}
 }
 
-/**
- * THE FIRST SIGHTING IS KEPT, NOT OVERWRITTEN.
- *
- * "When did this start" is the question a reader asks — and a record that moved its own start time on
- * every repetition would make a week-old refusal look like it began a second ago.
- */
+// THE FIRST SIGHTING IS KEPT, NOT OVERWRITTEN.
+//
+// "When did this start" is the question a reader asks — and a record that moved its own start time on
+// every repetition would make a week-old refusal look like it began a second ago.
 func TestRecordKeepsTheOriginalFirstSeen(t *testing.T) {
 	kv := newFakeKV()
 	r := NewRegistry(kv)
@@ -109,12 +105,10 @@ func TestRecordKeepsTheOriginalFirstSeen(t *testing.T) {
 	}
 }
 
-/**
- * THE WRITE IS A PUT, NOT A CREATE.
- *
- * A create reports an existing key as `(0, nil)` — success without a write — so the second refusal
- * onward would vanish silently. That is the mistake the job registry made with its heartbeat.
- */
+// THE WRITE IS A PUT, NOT A CREATE.
+//
+// A create reports an existing key as `(0, nil)` — success without a write — so the second refusal
+// onward would vanish silently. That is the mistake the job registry made with its heartbeat.
 func TestRecordWritesEveryTime(t *testing.T) {
 	kv := newFakeKV()
 	r := NewRegistry(kv)
