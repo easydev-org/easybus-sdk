@@ -187,19 +187,6 @@ func EnvelopeKindString(k easybusv1.Envelope_Kind) string {
 	return ""
 }
 
-// EnvelopeKindFromString parses an envelope kind from its wire name.
-func EnvelopeKindFromString(s string) easybusv1.Envelope_Kind {
-	switch s {
-	case "req":
-		return easybusv1.Envelope_KIND_REQ
-	case "pub":
-		return easybusv1.Envelope_KIND_PUB
-	case "queue":
-		return easybusv1.Envelope_KIND_QUEUE
-	}
-	return easybusv1.Envelope_KIND_UNSPECIFIED
-}
-
 // ── payload helpers (opaque JSON bodies are structpb.Value on the wire) ──────
 
 // Value converts an arbitrary Go value into a structpb.Value (the wire shape of
