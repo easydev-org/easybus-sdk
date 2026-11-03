@@ -358,6 +358,14 @@ func (a *Agent) SubscribeProgress(ctx context.Context, tenant, callID string) (b
 // it is a free-form string on the wire. Source records the ORIGIN: `user`
 // (a human prompt), `session:{session}` (another session), `system:{name}`
 // (automation), or an extension-defined value; pass "" to omit it.
+// PublishMailbox DELIVERS a message to a session's mailbox subject.
+//
+// THIS IS THE EXTENSION PATH. A process with no database handle cannot write the queue, so it publishes
+// here and the agent's bridge turns the message into a queue row. It carries a payload because the
+// payload IS the message.
+//
+// The agent's own "there is work" nudge uses PublishWake instead — see the note on protocol.ChWake for
+// why sharing this subject made every prompt arrive twice.
 func (a *Agent) PublishMailbox(ctx context.Context, tenant, sessionName, typ string, payload any, source ...string) error {
 	id := protocol.NewID()
 	var src *string
@@ -366,6 +374,16 @@ func (a *Agent) PublishMailbox(ctx context.Context, tenant, sessionName, typ str
 		src = &s
 	}
 	return a.b.InboxPublish(ctx, protocol.ChMailbox(tenant, sessionName), easybus.MailboxMessage{Id: id, Type: typ, Payload: easybus.Value(payload), Source: src}, bus.InboxPublishOpts{ID: id, SessionName: sessionName, Tenant: tenant})
+}
+
+// PublishWake tells the replicas that a session has work waiting.
+//
+// IT IS A NOTIFICATION, NOT A MESSAGE, and the body is empty on purpose: the work is already in the
+// queue, written by whoever called this. A consumer that receives it drains; there is nothing here to
+// fold, and nothing for a bridge to mistake for a delivery.
+func (a *Agent) PublishWake(ctx context.Context, tenant, sessionName string) error {
+	id := protocol.NewID()
+	return a.b.InboxPublish(ctx, protocol.ChWake(tenant, sessionName), easybus.MailboxMessage{Id: id, Type: "wake"}, bus.InboxPublishOpts{ID: id, SessionName: sessionName, Tenant: tenant})
 }
 
 // DefaultMaxNaksBeforeTerm is the poison-message escalation threshold:
@@ -381,17 +399,33 @@ type TermError struct{ NoDLQ bool }
 
 func (e *TermError) Error() string { return "terminated by consumer" }
 
-// ConsumeMailbox consumes the durable mailbox wildcard with explicit
-// ack/nak/term, resolving each message to its session. Handler errors nak
-// (redelivery after delayMs); *TermError terms (optionally without the
-// dead-letter copy); malformed messages are acked and skipped.
-// The returned cancel func closes the subscription.
+// ConsumeWake consumes the durable WAKE stream with explicit ack/nak/term.
+//
+// WAKE, NOT MAILBOX. These are two different questions and one subject could not answer both: a wake says
+// "there is work, go drain", and mailbox delivery says "here is a message for you to make durable". The
+// runtime only ever needs the first — it drains the queue itself — so subscribing it to the delivery
+// subject is what made the bridge see the agent's own nudges and enqueue them a second time.
+//
+// Handler errors nak (redelivery after delayMs); *TermError terms without the dead-letter copy;
+// malformed messages are acked and skipped. The returned cancel func closes the subscription.
+func (a *Agent) ConsumeWake(ctx context.Context, handler func(MailboxMessageResolved) error, nakDelayMs int, maxNaks ...int) (func(), error) {
+	return a.consume(ctx, protocol.WakeWildcardAll+">", handler, nakDelayMs, maxNaks...)
+}
+
+// ConsumeMailbox is kept for consumers that want the DELIVERY stream — that is, anything that must see
+// the message bodies rather than only be told that work exists.
+//
+// THE AGENT'S OWN RUNTIME DOES NOT USE THIS ANY MORE; it uses ConsumeWake. See protocol.ChWake.
 func (a *Agent) ConsumeMailbox(ctx context.Context, handler func(MailboxMessageResolved) error, nakDelayMs int, maxNaks ...int) (func(), error) {
+	return a.consume(ctx, protocol.MailboxWildcardAll+">", handler, nakDelayMs, maxNaks...)
+}
+
+func (a *Agent) consume(ctx context.Context, subject string, handler func(MailboxMessageResolved) error, nakDelayMs int, maxNaks ...int) (func(), error) {
 	limit := DefaultMaxNaksBeforeTerm
 	if len(maxNaks) > 0 && maxNaks[0] > 0 {
 		limit = maxNaks[0]
 	}
-	sub, err := a.b.InboxConsume(ctx, bus.InboxConsumeOpts{Subject: protocol.MailboxWildcardAll + ">"})
+	sub, err := a.b.InboxConsume(ctx, bus.InboxConsumeOpts{Subject: subject})
 	if err != nil {
 		return nil, err
 	}

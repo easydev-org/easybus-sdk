@@ -80,6 +80,8 @@ const (
 	// MailboxWildcardAll spans every tenant (cross-tenant consumers).
 	MailboxWildcard    = "easybus."
 	MailboxWildcardAll = "easybus.*.mailbox."
+	// WakeWildcardAll spans every tenant's wake subject (see ChWake).
+	WakeWildcardAll = "easybus.*.wake."
 	// LifecycleWildcard spans every tenant's lifecycle subject.
 	LifecycleWildcard = "easybus.*.session.lifecycle."
 	// VarsBucket stores extension variables, keyed tenant-first:
@@ -97,8 +99,33 @@ func ChToolProgress(tenant, callID string) string {
 func ChVariable(tenant, extID, name string) string {
 	return TenantPrefix(tenant) + "var." + extID + "." + name
 }
+
+// ChMailbox is where a message is DELIVERED to a session — the extension path.
+//
+// The bridge reads this subject and turns what it finds into a queue row, because an extension has no
+// database handle of its own.
 func ChMailbox(tenant, session string) string {
 	return TenantPrefix(tenant) + "mailbox." + SessionToken(session)
+}
+
+/**
+ * ChWake IS A DIFFERENT SUBJECT ON PURPOSE, and the reason is a bug that survived a fix.
+ *
+ * The agent's own "there is work for this session" nudge used to share `mailbox.<session>` with the
+ * extension delivery path. JetStream publishes are visible to plain subscribers too, so the bridge —
+ * which exists to turn EXTENSION messages into queue rows — also saw the agent's own nudges and enqueued
+ * them a second time. Every prompt was written twice: once by the server, once by the bridge acting on
+ * the signal that the write had happened.
+ *
+ * It went unnoticed for a while because both copies carried a complete payload, so the duplicate looked
+ * like the mailbox doing its job. When the payload was the thing that broke, the second copy is what
+ * surfaced as an empty message.
+ *
+ * So: `mailbox.<session>` is DELIVERY (the bridge listens), and `wake.<session>` is NOTIFICATION (only
+ * the runtime listens, and it ignores the body entirely).
+ */
+func ChWake(tenant, session string) string {
+	return TenantPrefix(tenant) + "wake." + SessionToken(session)
 }
 func ChSessionEvents(tenant, session string) string {
 	return TenantPrefix(tenant) + "session.events." + SessionToken(session)
