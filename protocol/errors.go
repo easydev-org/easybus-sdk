@@ -13,8 +13,9 @@ import "strings"
 //   - a network failure reported as "the key is absent" → an extension starts with no configuration
 //     and reports itself unconfigured, while the config is plainly set.
 //
-// Every SDK had the second shape: `catch { return 0 }`, `except: return 0`, `Err(_) => 0`. So the
-// classification lives here, once, and the conformance table pins it for all four.
+// Every SDK had the second shape: `catch { return 0 }`, `except: return 0`, `Err(_) => 0`. That
+// duplication is why the classification lives here, once, with the conformance table pinning it — the
+// other SDKs are gone, but the reason the classification is centralised did not go with them.
 
 // IsLostRace reports the server's rejection of a CAS that lost a race.
 //

@@ -114,8 +114,20 @@ Legacy un-suffixed keys (`<extId>`) still parse via `extension.PresenceExtID`.
 
 ## Wire-format changes
 
-The Go and TypeScript SDKs share the wire contract. A protocol-affecting change
-must land in both, in lockstep, and be followed by a new `v2.x.y` tag (Go
-semantic import versioning). Downstream repos consume the tag via the artifact
-Go proxy (see [Packages via artifact](#packages-via-artifact-not-githubpublic-registries)),
+**GO IS THE ONLY IMPLEMENTATION.** A protocol-affecting change lands here and
+nowhere else: edit `proto/easybus/v1/protocol.proto`, run `generate.sh`, and tag.
+
+The TypeScript, Python and Rust bindings were deleted, so there is no second
+implementation to keep in lockstep and no cross-language review to arrange. The
+one that existed had drifted six versions behind while still appearing to work,
+which is why it is gone rather than maintained: a second implementation of a
+wire contract is not a second consumer, it is a second opinion about what the
+bytes mean.
+
+If a language is ever added back, it generates from the same proto — the
+contract is ready. What must NOT come back is the assumption that every
+language has to exist.
+
+Downstream repos consume the tag via the artifact Go proxy (see
+[Packages via artifact](#packages-via-artifact-not-githubpublic-registries)),
 not a public registry or github.com.
