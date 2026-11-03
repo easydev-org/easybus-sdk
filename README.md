@@ -26,12 +26,23 @@ Module: `github.com/easydev-org/easybus-sdk`
 ## The wire contract is protobuf
 
 `proto/easybus/v1/protocol.proto` is the **single source of truth** for every
-message that rides the bus. It is language-neutral: `buf generate` emits Go
-today (`gen/easybus/v1`), and TypeScript / Python / Rust bindings later, from
-the same file — no per-language schema to keep in sync. (The old
-abc-protocol defined the contract in TypeScript zod and code-generated Go via
-OpenAPI; this is a semantic rewrite, and wire compatibility with abc-protocol
-is not required.)
+message that rides the bus. `buf generate` emits Go into `gen/easybus/v1`, and
+Go is the ONLY implementation.
+
+**THE MULTI-LANGUAGE PLAN WAS ABANDONED, and the reasons are worth keeping.**
+TypeScript, Python and Rust bindings were built and are gone: the TypeScript
+SDK had re-implemented subjects, KV keys, envelope rules, discovery and
+permissions that this repository already had, and the two drifted — the one
+extension still using it sat six versions behind on the wire while its own
+tools kept working, which is a gap nothing fails on. It is now a Go shell with
+a browser sidecar, so a protocol change is a change to this repository only.
+
+The proto stays language-neutral on purpose: if a second language is ever
+genuinely needed, the contract is ready and `proto/buf.gen.yaml` gains a
+plugin. What is gone is the assumption that every language must exist.
+(The old abc-protocol defined the contract in TypeScript zod and
+code-generated Go via OpenAPI; this is a semantic rewrite, and wire
+compatibility with abc-protocol is not required.)
 
 Subject conventions (`easybus.<tenant>.<...>`) and tenant rules are runtime
 logic, not schema, and stay in `protocol/protocol.go`.
