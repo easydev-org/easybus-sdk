@@ -47,6 +47,29 @@ time the protocol and the product change at different speeds.
 | `conformance` | Transport-agnostic protocol test suite |
 | `gen/easybus/v1` | Generated wire types (from `proto/easybus/v1`) |
 
+## There is no `job` package, and that is deliberate
+
+THIS REPOSITORY USED TO CARRY ONE: a `Registry` over a KV bucket with a heartbeat, a sweeper that
+marked stalled entries lost, and a four-state vocabulary (`running`, `done`, `cancelled`, `lost`)
+meant to describe any long-running work. The console listed a conversation's jobs from it, and every
+extension registered into it.
+
+IT WAS REMOVED BECAUSE THE DOMAINS DO NOT SHARE A SHAPE. A sandbox command is a process this extension
+owns, so cancelling it kills something and losing contact means it is gone. A GitHub workflow run is a
+process GitHub owns: cancelling it is a *request* that may be declined, and the extension restarting
+does not stop the run at all. Pressing both into one four-state vocabulary cost the distinctions that
+mattered — GitHub's `action_required` (waiting for a human) had no state to land in, and `lost` was a
+lie about a run that was still going.
+
+WHAT REPLACED IT: each extension owns its own job tools and its own state words, so
+`sandbox-job-output` reads the worker's buffer and `gh-run-log` reads GitHub — each answering from the
+place that actually knows. `sessionstore` still provides the per-session list shape for anyone who
+wants one; it just no longer pretends two different kinds of work are the same list.
+
+WHAT DID NOT GO WITH IT: the completion wake (a finished job publishing a mailbox trigger so the
+conversation is not left polling) lives in `extension.PublishMailboxEvent` and never depended on this
+package.
+
 ## The wire contract is protobuf
 
 `proto/easybus/v1/protocol.proto` is the **single source of truth** for every
