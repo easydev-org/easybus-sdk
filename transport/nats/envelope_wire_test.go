@@ -7,6 +7,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 
+	easybus "github.com/easydev-org/easybus-sdk"
 	easybusv1 "github.com/easydev-org/easybus-sdk/gen/easybus/v1"
 )
 
@@ -136,5 +137,30 @@ func TestDecodeRejectsALegacyJSONEnvelope(t *testing.T) {
 	m := &nats.Msg{Subject: "easybus.t.ch", Data: legacy}
 	if env, err := decode(m); err == nil {
 		t.Fatalf("a legacy JSON envelope decoded as %v; it must be rejected", env)
+	}
+}
+
+/**
+ * THE SIGNATURE MUST BE OVER THE SAME KIND WORD THE HEADER IS.
+ *
+ * The header is built from the TRANSPORT word ("queue"), and verification reads the kind back out of the
+ * envelope — where it is a protobuf ENUM. `GetKind().String()` returns "KIND_QUEUE", so signing and
+ * verifying disagreed by a prefix and every signed message failed against its own signature. Nothing
+ * caught it because the identity test needs a live broker and skips without one.
+ */
+func TestSignatureKindAgreesWithTheEnvelope(t *testing.T) {
+	for _, kind := range []string{"req", "pub", "queue"} {
+		data, err := buildEnvelope(kind, "easybus.t.ch", map[string]any{"a": 1}, "t", "id", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := &easybusv1.Envelope{}
+		if err := proto.Unmarshal(data, env); err != nil {
+			t.Fatal(err)
+		}
+		// What verifyMsg now derives, and what the sender signed with.
+		if got := easybus.EnvelopeKindString(env.GetKind()); got != kind {
+			t.Errorf("%q round-tripped as %q; the signature would not verify", kind, got)
+		}
 	}
 }

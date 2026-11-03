@@ -390,7 +390,10 @@ func (b *Bus) verifyMsg(m *nats.Msg) bool {
 	}
 	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret,
 		identity.Fields{
-			Tenant: env.Tenant, Ch: m.Subject, Kind: env.GetKind().String(),
+			// `easybus.EnvelopeKindString`, NOT `GetKind().String()`: the latter is the protobuf enum
+			// NAME ("KIND_QUEUE") while the header is signed with the transport word ("queue"). The two
+			// must be the same string or every signature fails against its own message.
+			Tenant: env.Tenant, Ch: m.Subject, Kind: easybus.EnvelopeKindString(env.GetKind()),
 			ID: env.GetId(), Payload: body,
 		}, sig)
 }
