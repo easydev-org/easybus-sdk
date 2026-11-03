@@ -6,6 +6,8 @@
 package easybus
 
 import (
+	"encoding/json"
+
 	"github.com/easydev-org/easybus-sdk/gen/easybus/v1"
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -201,16 +203,39 @@ func EnvelopeKindFromString(s string) easybusv1.Envelope_Kind {
 // ── payload helpers (opaque JSON bodies are structpb.Value on the wire) ──────
 
 // Value converts an arbitrary Go value into a structpb.Value (the wire shape of
-// every opaque payload body). Errors are folded to NullValue.
+// every opaque payload body).
+//
+// A GO STRUCT IS SERIALISED FIRST, RATHER THAN FOLDED TO NULL.
+// `structpb.NewValue` accepts objects, arrays and scalars and REFUSES a struct, and this function used
+// to swallow that refusal into `NullValue()`. The result was a message that arrived, was delivered, and
+// carried nothing — the consumer saw `payload: nil` and had no way to tell an empty body from a body
+// that failed to convert. `agent.WakePayload` is a struct, so every prompt went through this.
+//
+// THE JSON ROUND TRIP IS THE CONVERSION, not a workaround: the wire form of an opaque body IS JSON, so
+// a struct that marshals to `{"type":"trigger","text":"hi"}` should arrive as exactly that object.
 func Value(v any) *structpb.Value {
 	if v == nil {
 		return structpb.NewNullValue()
 	}
 	out, err := structpb.NewValue(v)
-	if err != nil {
+	if err == nil {
+		return out
+	}
+	// A struct (or anything else structpb cannot take directly): marshal it to its JSON form and use
+	// that. Failing here means the value has no JSON representation at all, which is a caller bug worth
+	// seeing rather than hiding.
+	raw, jerr := json.Marshal(v)
+	if jerr != nil {
 		return structpb.NewNullValue()
 	}
-	return out
+	var generic any
+	if json.Unmarshal(raw, &generic) != nil {
+		return structpb.NewNullValue()
+	}
+	if converted, cerr := structpb.NewValue(generic); cerr == nil {
+		return converted
+	}
+	return structpb.NewNullValue()
 }
 
 // ValueInterface unwraps a structpb.Value back to an arbitrary Go value.

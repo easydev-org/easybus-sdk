@@ -15,10 +15,11 @@ import (
 
 	easybus "github.com/easydev-org/easybus-sdk"
 	"github.com/easydev-org/easybus-sdk/bus"
+	easybusv1 "github.com/easydev-org/easybus-sdk/gen/easybus/v1"
 	"github.com/easydev-org/easybus-sdk/identity"
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -362,7 +363,11 @@ func (b *Bus) signMsg(msg *nats.Msg, ch, kind, id string, payload any) {
 
 // verifyMsg checks easybus-id/easybus-sig headers (opt-in; nil identity = always
 // true). Returns false for missing/invalid signatures.
-func (b *Bus) verifyMsg(m *nats.Msg, raw *rawEnvelope) bool {
+//
+// IT SIGNS THE SERIALISED BYTES AS THE ENVELOPE DEFINES THEM. The signature covers payload + kind + id
+// + tenant + ch, and the payload's wire form is now the protobuf one; signing a JSON rendering of it
+// while sending protobuf would make every signature fail against its own message.
+func (b *Bus) verifyMsg(m *nats.Msg) bool {
 	if b.idn == nil {
 		return true
 	}
@@ -370,24 +375,34 @@ func (b *Bus) verifyMsg(m *nats.Msg, raw *rawEnvelope) bool {
 	if sig == "" {
 		return false
 	}
-	id := ""
-	if raw.ID != nil {
-		id = *raw.ID
+	env := &easybusv1.Envelope{}
+	if err := proto.Unmarshal(m.Data, env); err != nil {
+		return false
+	}
+	// THE SIGNED PAYLOAD IS ITS JSON RENDERING, NOT THE PROTOBUF BYTES: proto.Marshal is not
+	// deterministic across field ordering in the general case, and a signature over it would depend on
+	// an implementation detail of the marshaller rather than on the message.
+	var body json.RawMessage
+	if env.Payload != nil {
+		if raw, err := env.Payload.MarshalJSON(); err == nil {
+			body = raw
+		}
 	}
 	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret,
-		identity.Fields{Tenant: raw.Tenant, Ch: m.Subject, Kind: raw.Kind, ID: id, Payload: json.RawMessage(raw.Payload)}, sig)
+		identity.Fields{
+			Tenant: env.Tenant, Ch: m.Subject, Kind: env.GetKind().String(),
+			ID: env.GetId(), Payload: body,
+		}, sig)
 }
 
 // envelopeTenant reads just the tenant field out of an already-encoded
 // envelope (used for signing).
 func envelopeTenant(data []byte) string {
-	var raw struct {
-		Tenant string `json:"tenant"`
-	}
-	if json.Unmarshal(data, &raw) != nil {
+	env := &easybusv1.Envelope{}
+	if proto.Unmarshal(data, env) != nil {
 		return ""
 	}
-	return raw.Tenant
+	return env.Tenant
 }
 
 func sameSubjects(a, b []string) bool {
@@ -446,69 +461,80 @@ func tenantOf(ch, explicit string) string {
 	return protocol.SubjectTenant(ch)
 }
 
-// buildEnvelope assembles the wire envelope in one place. `tenant` is
-// REQUIRED on the v2 wire. The optional fields ride only when set.
+// buildEnvelope marshals the wire envelope with the GENERATED protobuf type.
+//
+// IT USED TO HAND-ASSEMBLE A `map[string]any` AND `json.Marshal` IT — a written-out copy of
+// `message Envelope` in protocol.proto. Two copies of one shape, with nothing comparing them: a field
+// renamed in the .proto kept compiling here, and the only symptom was a consumer seeing an empty value.
+// The generated type cannot drift from the .proto because it IS the .proto.
+//
+// WHY THE PAYLOAD GOES THROUGH `easybus.Value` AND NOT STRAIGHT IN: `Envelope.Payload` is
+// `google.protobuf.Value`, and `structpb.NewValue` accepts objects, arrays and scalars — NOT Go structs.
+// Handing it a struct fails, and `Value` folds that failure to null, which is how a prompt body became
+// empty. `Value` now round-trips through JSON first (see its comment), so a struct arrives as the object
+// it marshals to.
 func buildEnvelope(kind, ch string, payload any, tenant, id, sessionName, replyTo string) ([]byte, error) {
-	m := map[string]any{"v": 2, "ch": ch, "kind": kind, "tenant": tenant, "payload": payload}
+	env := &easybusv1.Envelope{
+		V:      protocol.Ptr(int32(2)),
+		Ch:     ch,
+		Tenant: tenant,
+		Kind:   kindOf(kind),
+		// JSON-COMPATIBLE BODY. `AsInterface` is what every consumer reads, so the value has to be the
+		// one JSON can carry — see the note above about structs.
+		Payload: easybus.Value(payload),
+	}
 	if id != "" {
-		m["id"] = id
+		env.Id = protocol.Ptr(id)
 	}
 	if sessionName != "" {
-		m["session_name"] = sessionName
+		env.SessionName = protocol.Ptr(sessionName)
 	}
 	if replyTo != "" {
-		m["reply_to"] = replyTo
+		env.ReplyTo = protocol.Ptr(replyTo)
 	}
-	return json.Marshal(m)
+	return proto.Marshal(env)
 }
 
-// rawEnvelope mirrors the wire shape but keeps payload as raw bytes, so
-// downstream Coerce calls skip a full Marshal round trip (the hot path:
-// every tool call / hook / config delivery).
-type rawEnvelope struct {
-	V           int             `json:"v"`
-	Tenant      string          `json:"tenant"`
-	Ch          string          `json:"ch"`
-	Kind        string          `json:"kind"`
-	ID          *string         `json:"id,omitempty"`
-	SessionName *string         `json:"session_name,omitempty"`
-	ReplyTo     *string         `json:"reply_to,omitempty"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
+// kindOf maps the transport's lowercase word onto the generated enum.
+//
+// THE ENUM EXISTS ON THE WIRE, so the string has to be converted exactly once, here, instead of the
+// decoder re-deriving it from a string on every message.
+func kindOf(kind string) easybusv1.Envelope_Kind {
+	switch kind {
+	case "req":
+		return easybusv1.Envelope_KIND_REQ
+	case "pub":
+		return easybusv1.Envelope_KIND_PUB
+	case "queue":
+		return easybusv1.Envelope_KIND_QUEUE
+	}
+	return easybusv1.Envelope_KIND_UNSPECIFIED
 }
 
-func decode(m *nats.Msg) (*easybus.Envelope, error) {
-	var raw rawEnvelope
-	if err := json.Unmarshal(m.Data, &raw); err != nil {
+// decode unmarshals the wire envelope into the GENERATED type.
+//
+// THE HAND-WRITTEN MIRROR IS GONE. It was a second copy of `message Envelope` kept in step by hand, and
+// it disagreed with the .proto in exactly the place that mattered: `payload` was decoded as raw bytes
+// and then re-parsed a second time, so a body that failed the first parse arrived as nil with nothing
+// reporting it.
+func decode(m *nats.Msg) (*easybusv1.Envelope, error) {
+	env := &easybusv1.Envelope{}
+	if err := proto.Unmarshal(m.Data, env); err != nil {
 		return nil, err
 	}
-	// v2 is a breaking layout change: reject anything that is not v2.
-	if raw.V != 2 {
-		log.Printf("[easybus] rejecting envelope version %d on %s (this build speaks v2)", raw.V, raw.Ch)
-		return nil, fmt.Errorf("unsupported envelope version %d", raw.V)
+	// v2 is a breaking layout change: reject anything that is not v2. A binary envelope from an older
+	// build fails the unmarshal above rather than arriving with a plausible-looking zero version, so
+	// this check is about a v2 envelope with the field missing.
+	if env.GetV() != 2 {
+		log.Printf("[easybus] rejecting envelope version %d on %s (this build speaks v2)", env.GetV(), m.Subject)
+		return nil, fmt.Errorf("unsupported envelope version %d", env.GetV())
 	}
 	// Envelope tenant must agree with the subject's tenant segment.
-	if expected := protocol.SubjectTenant(m.Subject); expected != "" && raw.Tenant != expected {
-		return nil, fmt.Errorf("envelope tenant %q != subject tenant %q on %s", raw.Tenant, expected, m.Subject)
-	}
-	v := int32(raw.V)
-	var payload *structpb.Value
-	if len(raw.Payload) > 0 {
-		payload = &structpb.Value{}
-		if json.Unmarshal(raw.Payload, payload) != nil {
-			payload = nil
-		}
-	}
-	env := &easybus.Envelope{
-		V:           &v,
-		Tenant:      raw.Tenant,
-		Ch:          raw.Ch,
-		Kind:        easybus.EnvelopeKindFromString(raw.Kind),
-		Id:          raw.ID,
-		SessionName: raw.SessionName,
-		Payload:     payload,
+	if expected := protocol.SubjectTenant(m.Subject); expected != "" && env.Tenant != expected {
+		return nil, fmt.Errorf("envelope tenant %q != subject tenant %q on %s", env.Tenant, expected, m.Subject)
 	}
 	if m.Reply != "" {
-		env.ReplyTo = &m.Reply
+		env.ReplyTo = protocol.Ptr(m.Reply)
 	}
 	return env, nil
 }
@@ -540,8 +566,7 @@ func (b *Bus) Request(ctx context.Context, ch string, payload any, opts bus.Requ
 		}
 	}
 	if b.idn != nil {
-		var raw rawEnvelope
-		if json.Unmarshal(m.Data, &raw) == nil && !b.verifyMsg(m, &raw) {
+		if !b.verifyMsg(m) {
 			return nil, fmt.Errorf("identity: signature verification failed on %s", m.Subject)
 		}
 	}
@@ -581,8 +606,7 @@ func (b *Bus) RequestMany(ctx context.Context, ch string, payload any, opts bus.
 			return out, nil
 		}
 		if b.idn != nil {
-			var raw rawEnvelope
-			if json.Unmarshal(m.Data, &raw) == nil && !b.verifyMsg(m, &raw) {
+			if !b.verifyMsg(m) {
 				continue
 			}
 		}
@@ -640,8 +664,7 @@ func (s *natsSub) Next(ctx context.Context) (*easybus.Envelope, bool) {
 		return nil, false
 	}
 	if s.bus.idn != nil {
-		var raw rawEnvelope
-		if json.Unmarshal(m.Data, &raw) == nil && !s.bus.verifyMsg(m, &raw) {
+		if !s.bus.verifyMsg(m) {
 			return nil, false // bad/missing signature: drop
 		}
 	}
