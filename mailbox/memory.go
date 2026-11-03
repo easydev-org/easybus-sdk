@@ -33,7 +33,7 @@ func NewMemory() *Memory {
 }
 
 // Enqueue adds a message; an existing id is replaced, matching the durable queue.
-func (m *Memory) Enqueue(_ context.Context, tenant, session, id, typ string, payload any, source string) (string, error) {
+func (m *Memory) Enqueue(_ context.Context, tenant, session, id string, typ Type, payload any, source string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if id == "" {
@@ -43,7 +43,7 @@ func (m *Memory) Enqueue(_ context.Context, tenant, session, id, typ string, pay
 	key := tenant + "\x00" + session + "\x00" + id
 	m.msgs[key] = Message{
 		ID: id, Type: typ, Source: source, Payload: payload,
-		Status: "pending", CreatedAt: time.Now().UnixMilli(),
+		Status: Pending, CreatedAt: time.Now().UnixMilli(),
 	}
 	m.meta[key] = struct{ Tenant, Session string }{tenant, session}
 	return id, nil
@@ -63,7 +63,7 @@ func (m *Memory) Drain(_ context.Context, tenant, session string) ([]Message, er
 		if !msg.IsPending() {
 			continue
 		}
-		msg.Status = "consumed"
+		msg.Status = Consumed
 		msg.ConsumedAt = now
 		m.msgs[key] = msg
 		out = append(out, msg)
@@ -101,10 +101,10 @@ func (m *Memory) Page(_ context.Context, tenant, session string) ([]Message, err
 }
 
 // SessionsWithPending lists conversations with work waiting, narrowed to the given types.
-func (m *Memory) SessionsWithPending(_ context.Context, types []string) ([]struct{ Tenant, SessionName string }, error) {
+func (m *Memory) SessionsWithPending(_ context.Context, types []Type) ([]struct{ Tenant, SessionName string }, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	want := map[string]bool{}
+	want := map[Type]bool{}
 	for _, t := range types {
 		want[t] = true
 	}

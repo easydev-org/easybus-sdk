@@ -45,21 +45,62 @@ const TTL = 24 * time.Hour
 // TTLMs is TTL in the unit the bus takes, exported so callers stop re-deriving it.
 func TTLMs() int64 { return TTL.Milliseconds() }
 
+// Type is what a mailbox message asks the runtime to do.
+//
+// A NAMED TYPE RATHER THAN A STRING, because the wire value is compared all over the runtime with
+// literals — `switch it.Type { case "trigger": }` — and a typo there is a message that is delivered,
+// acked, and then silently ignored. The string form is unchanged, so this costs nothing on the wire and
+// turns that class of mistake into a compile error.
+type Type string
+
+const (
+	// Trigger runs a turn: it carries a prompt, a subsession hand-off, or a completion notice.
+	Trigger Type = "trigger"
+	// Interrupt stops the turn in flight for its session.
+	Interrupt Type = "interrupt"
+	// Event is context for the next turn and never starts one by itself.
+	Event Type = "event"
+	// Compact asks the runtime to fold history. Same effect as Trigger, listed separately because the
+	// runtime's wake filter names it.
+	Compact Type = "compact"
+)
+
+// String lets a Type be used where the old bare string was (log fields, payloads).
+func (t Type) String() string { return string(t) }
+
+// Status is where a message is in its delivery.
+type Status string
+
+const (
+	Pending  Status = "pending"
+	Consumed Status = "consumed"
+)
+
 // Message is one mailbox entry.
 type Message struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Source  string `json:"source"`
-	Payload any    `json:"payload"`
-	// Status is "pending" or "consumed".
-	Status string `json:"status"`
+	ID     string `json:"id"`
+	Type   Type   `json:"type"`
+	Source string `json:"source"`
+	// Payload is the body, handed to the fold unchanged. It stays `any` on purpose: an extension
+	// publishes its own shape, and this queue must not need to know it.
+	Payload any `json:"payload"`
+	// Status is Pending until a drain claims it, then Consumed. The key is never deleted, so a UI can
+	// still answer "was my message picked up" after it has been.
+	Status Status `json:"status"`
 	// CreatedAt and ConsumedAt are Unix milliseconds; ConsumedAt is 0 while pending.
 	CreatedAt  int64 `json:"createdAt"`
 	ConsumedAt int64 `json:"consumedAt,omitempty"`
 }
 
-// IsPending reports whether the message is still waiting to be taken.
-func (m Message) IsPending() bool { return m.Status != "consumed" }
+/**
+ * THE TEST IS POSITIVE: only Pending is pending.
+ *
+ * `m.Status != "consumed"` treated EVERY other value as pending — including an empty one, which is what
+ * a message written by an older producer would carry, and the consequence was that such a row would be
+ * drained forever without ever being claimed. A status this code does not recognise is not work waiting
+ * to be done; it is a row to leave alone.
+ */
+func (m Message) IsPending() bool { return m.Status == Pending }
 
 // Queue reads and writes one deployment's mailbox.
 type Queue struct{ kv *sessionstore.Store }
@@ -71,13 +112,13 @@ func New(b bus.Bus) *Queue { return &Queue{kv: sessionstore.New(b)} }
 //
 // THE ID COMES FROM THE PRODUCER when it has one, so a redelivery by a publisher that retried lands on
 // the same key and replaces itself rather than arriving twice. An empty id is minted here.
-func (q *Queue) Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error) {
+func (q *Queue) Enqueue(ctx context.Context, tenant, session, id string, typ Type, payload any, source string) (string, error) {
 	if id == "" {
 		id = newID()
 	}
 	m := Message{
 		ID: id, Type: typ, Source: source, Payload: payload,
-		Status: "pending", CreatedAt: time.Now().UnixMilli(),
+		Status: Pending, CreatedAt: time.Now().UnixMilli(),
 	}
 	return id, q.kv.Put(ctx, DefaultBucket, sessionstore.Key(tenant, session, id), m, TTL)
 }
@@ -119,7 +160,7 @@ func (q *Queue) Drain(ctx context.Context, tenant, session string) ([]Message, e
 	out := make([]Message, 0, len(pending))
 	for _, p := range pending {
 		claimed := p.msg
-		claimed.Status = "consumed"
+		claimed.Status = Consumed
 		claimed.ConsumedAt = now
 		won, cerr := q.kv.CompareAndSwap(ctx, DefaultBucket, sessionstore.Key(tenant, session, p.msg.ID), claimed, p.rev)
 		if cerr != nil {
@@ -178,12 +219,12 @@ func (q *Queue) Page(ctx context.Context, tenant, session string) ([]Message, er
 //
 // TYPES NARROW IT to the messages that actually wake a turn, so a bucket full of consumed rows does not
 // produce a boot-time list of every session that ever did anything.
-func (q *Queue) SessionsWithPending(ctx context.Context, types []string) ([]struct{ Tenant, SessionName string }, error) {
+func (q *Queue) SessionsWithPending(ctx context.Context, types []Type) ([]struct{ Tenant, SessionName string }, error) {
 	rows, err := q.kv.List(ctx, DefaultBucket, ">")
 	if err != nil {
 		return nil, err
 	}
-	want := map[string]bool{}
+	want := map[Type]bool{}
 	for _, t := range types {
 		want[t] = true
 	}
