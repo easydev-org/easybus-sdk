@@ -5,14 +5,12 @@ import (
 	"time"
 )
 
-/**
- * The timings are arithmetic, not taste, and these tests pin the arithmetic.
- *
- * EVERY ONE OF THEM IS A PROPERTY THAT BREAKS SILENTLY IF SOMEBODY TUNES A CONSTANT BY
- * FEEL: a running TTL shorter than the staleness threshold makes lost jobs vanish instead
- * of being recorded; a renewal interval too close to the TTL makes one slow call look like
- * a death.
- */
+// The timings are arithmetic, not taste, and these tests pin the arithmetic.
+//
+// EVERY ONE OF THEM IS A PROPERTY THAT BREAKS SILENTLY IF SOMEBODY TUNES A CONSTANT BY
+// FEEL: a running TTL shorter than the staleness threshold makes lost jobs vanish instead
+// of being recorded; a renewal interval too close to the TTL makes one slow call look like
+// a death.
 
 func TestRunningTTLOutlastsTheStalenessThreshold(t *testing.T) {
 	r := NewRegistry(nil)
@@ -35,17 +33,15 @@ func TestSeveralRenewalsFitInsideOneLifetime(t *testing.T) {
 	}
 }
 
-/**
- * BOTH LIFETIMES ARE THE SAME, BECAUSE THE STORE HAS ONE.
- *
- * NATS KV's TTL is a bucket setting applied once at creation, and Update resets it to that same value —
- * a per-key lifetime cannot be expressed. So the two constants are equal deliberately.
- *
- * THE OLD TEST ASSERTED Done > Running AND WOULD NOW FAIL, which is why it is replaced rather than
- * deleted: the thing worth pinning is the ROLE SPLIT. Liveness is RenewedAt against StaleAfter; the TTL
- * is only when the store forgets. A short running TTL — the previous 60 seconds — deleted the entry
- * before the sweeper could record it as lost, which is the outcome that mechanism exists to prevent.
- */
+// BOTH LIFETIMES ARE THE SAME, BECAUSE THE STORE HAS ONE.
+//
+// NATS KV's TTL is a bucket setting applied once at creation, and Update resets it to that same value —
+// a per-key lifetime cannot be expressed. So the two constants are equal deliberately.
+//
+// THE OLD TEST ASSERTED Done > Running AND WOULD NOW FAIL, which is why it is replaced rather than
+// deleted: the thing worth pinning is the ROLE SPLIT. Liveness is RenewedAt against StaleAfter; the TTL
+// is only when the store forgets. A short running TTL — the previous 60 seconds — deleted the entry
+// before the sweeper could record it as lost, which is the outcome that mechanism exists to prevent.
 func TestBothLifetimesMatchTheOneBucketTTL(t *testing.T) {
 	r := NewRegistry(nil)
 	if r.RunningTTL != r.DoneTTL {
@@ -87,15 +83,13 @@ func TestTerminalStatesAreTerminal(t *testing.T) {
 	}
 }
 
-/**
- * THERE IS NO `failed` STATE, AND THAT IS THE POINT.
- *
- * A job that exited 1 is `done` with ExitCode 1. The job knows the code; the caller knows what it
- * wanted — `grep` exiting 1 means "no match", which is a successful search and a failed check. A
- * state named after the exit code would decide that on the caller's behalf.
- *
- * THIS TEST EXISTS TO STOP THE OBVIOUS "IMPROVEMENT" of splitting `done` into succeeded/failed.
- */
+// THERE IS NO `failed` STATE, AND THAT IS THE POINT.
+//
+// A job that exited 1 is `done` with ExitCode 1. The job knows the code; the caller knows what it
+// wanted — `grep` exiting 1 means "no match", which is a successful search and a failed check. A
+// state named after the exit code would decide that on the caller's behalf.
+//
+// THIS TEST EXISTS TO STOP THE OBVIOUS "IMPROVEMENT" of splitting `done` into succeeded/failed.
 func TestDoneDoesNotDistinguishSuccessFromFailure(t *testing.T) {
 	if State("failed") == StateDone || State("succeeded") == StateDone {
 		t.Fatal("state vocabulary must not gain a success/failure split")
@@ -108,13 +102,11 @@ func TestDoneDoesNotDistinguishSuccessFromFailure(t *testing.T) {
 	}
 }
 
-/**
- * TWO KINDS OF CANCELLING, BECAUSE THEY ARE TWO DIFFERENT FACTS.
- *
- * `kill` ends a process this extension owns: the signal lands and the call's answer is the answer.
- * `request` asks somebody else's system to stop, and that system may decline or take a step to
- * comply. A caller told only "cancel" would believe a CI run had stopped when it is merely stopping.
- */
+// TWO KINDS OF CANCELLING, BECAUSE THEY ARE TWO DIFFERENT FACTS.
+//
+// `kill` ends a process this extension owns: the signal lands and the call's answer is the answer.
+// `request` asks somebody else's system to stop, and that system may decline or take a step to
+// comply. A caller told only "cancel" would believe a CI run had stopped when it is merely stopping.
 func TestCancelModesAreDistinct(t *testing.T) {
 	if CancelKill == CancelRequest {
 		t.Fatal("kill and request must not share a value; they promise different things")
@@ -165,17 +157,15 @@ func TestKeySegmentsOrderFromGeneralToSpecific(t *testing.T) {
 	}
 }
 
-/**
- * A KEY BUILT FROM THE WRONG FIELD IS INVISIBLE, NOT WRONG-LOOKING.
- *
- * The bucket key is `t.<tenant>.s.<session>.<id>`. Building it from an entry's `ExtID` produces a
- * valid key under a tenant nobody queries: the job registers, renews and finishes, and the list that
- * asks for `t.<tenant>.s.<session>.*` never sees it. Nothing logs, nothing errors — the only symptom
- * is an empty list beside a task the reader watched run.
- *
- * THIS TEST EXISTS BECAUSE THAT HAPPENED: `Key(e.ExtID, e.Session, e.ID)` and
- * `SessionPrefix(tenant, session)` were both "right" on their own.
- */
+// A KEY BUILT FROM THE WRONG FIELD IS INVISIBLE, NOT WRONG-LOOKING.
+//
+// The bucket key is `t.<tenant>.s.<session>.<id>`. Building it from an entry's `ExtID` produces a
+// valid key under a tenant nobody queries: the job registers, renews and finishes, and the list that
+// asks for `t.<tenant>.s.<session>.*` never sees it. Nothing logs, nothing errors — the only symptom
+// is an empty list beside a task the reader watched run.
+//
+// THIS TEST EXISTS BECAUSE THAT HAPPENED: `Key(e.ExtID, e.Session, e.ID)` and
+// `SessionPrefix(tenant, session)` were both "right" on their own.
 func TestWriteKeyAndReadPrefixAgree(t *testing.T) {
 	e := Entry{Tenant: "alice", ExtID: "sandbox", Session: "s1", ID: "sandbox-job.abc"}
 	written := Key(e.Tenant, e.Session, e.ID)

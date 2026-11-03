@@ -11,20 +11,18 @@ import (
 	"github.com/easydev-org/easybus-sdk/sessionstore"
 )
 
-/**
- * Registry is the shared list of jobs, held in a KV bucket.
- *
- * WHY THE BUS AND NOT A LOCAL MAP. A job outlives the tool call that started it, and the
- * two processes that care about it are different: the extension that runs it and the
- * agent that has to report its completion. A local map would be a private opinion each of
- * them holds; the bucket is the one list they both read.
- *
- * THE HEARTBEAT IS THE TTL. There is no separate liveness protocol: a running entry is
- * written with a short TTL and renewed while the work continues, so an extension that
- * stops renewing — because it crashed, was evicted, or was killed — stops being visible.
- * Liveness becomes a property of the store rather than a thing every participant has to
- * remember to check.
- */
+// Registry is the shared list of jobs, held in a KV bucket.
+//
+// WHY THE BUS AND NOT A LOCAL MAP. A job outlives the tool call that started it, and the
+// two processes that care about it are different: the extension that runs it and the
+// agent that has to report its completion. A local map would be a private opinion each of
+// them holds; the bucket is the one list they both read.
+//
+// THE HEARTBEAT IS THE TTL. There is no separate liveness protocol: a running entry is
+// written with a short TTL and renewed while the work continues, so an extension that
+// stops renewing — because it crashed, was evicted, or was killed — stops being visible.
+// Liveness becomes a property of the store rather than a thing every participant has to
+// remember to check.
 type Registry struct {
 	kv *sessionstore.Store
 	// bus is kept for the ONE operation sessionstore does not offer: a compare-and-set. CAS is not
@@ -54,47 +52,41 @@ type Registry struct {
 	// DoneTTL is how long a finished entry stays readable.
 	DoneTTL time.Duration
 
-	/**
-	 * live maps a bucket key to the handle renewing it IN THIS PROCESS.
-	 *
-	 * IT EXISTS SO A CANCELLATION CAN STOP THE HEARTBEAT EXACTLY, not eventually. `Put` arrives
-	 * on a different code path than the handle that owns the job, so without this map the
-	 * heartbeat would keep writing `running` over the cancellation until it noticed on its next
-	 * tick — and if nobody ever noticed, forever.
-	 */
+	// live maps a bucket key to the handle renewing it IN THIS PROCESS.
+	//
+	// IT EXISTS SO A CANCELLATION CAN STOP THE HEARTBEAT EXACTLY, not eventually. `Put` arrives
+	// on a different code path than the handle that owns the job, so without this map the
+	// heartbeat would keep writing `running` over the cancellation until it noticed on its next
+	// tick — and if nobody ever noticed, forever.
 	mu   sync.Mutex
 	live map[string]Handle
 
-	/**
-	 * writeMu serialises RENEWAL against a TERMINAL WRITE.
-	 *
-	 * Both happen in this process — cancellation reaches `Put` through a tool handler, and the
-	 * heartbeat is a goroutine here — so a mutex makes them exact rather than eventually correct.
-	 * `stopLiveHandle` closes the done channel, but a renewal that is already past its select will
-	 * still write once afterwards; that write lands between the cancel and the reader's next look,
-	 * and it says `running`.
-	 *
-	 * Holding this across the check and the write means a terminal write cannot be overtaken: the
-	 * renewal either finishes first (and is then overwritten, correctly), or waits and sees `done`.
-	 */
+	// writeMu serialises RENEWAL against a TERMINAL WRITE.
+	//
+	// Both happen in this process — cancellation reaches `Put` through a tool handler, and the
+	// heartbeat is a goroutine here — so a mutex makes them exact rather than eventually correct.
+	// `stopLiveHandle` closes the done channel, but a renewal that is already past its select will
+	// still write once afterwards; that write lands between the cancel and the reader's next look,
+	// and it says `running`.
+	//
+	// Holding this across the check and the write means a terminal write cannot be overtaken: the
+	// renewal either finishes first (and is then overwritten, correctly), or waits and sees `done`.
 	writeMu sync.Mutex
 }
 
-/**
- * Default timings, and the arithmetic behind each.
- *
- * ONE TTL, NOT TWO, BECAUSE NATS KV HAS ONE. Its TTL is a BUCKET setting — `CreateKeyValue(TTL: …)`,
- * applied once when the bucket is created — and `Update` resets it to that same bucket value. A per-key
- * lifetime cannot be expressed, so the two constants below are equal on purpose rather than by
- * coincidence: a running entry and a finished one both live a day, and what distinguishes them is
- * `State` and `RenewedAt`.
- *
- * THIS IS NOT A COMPROMISE, ONCE THE ROLES ARE SEPARATED. The TTL is the store's forgetting policy; the
- * heartbeat is the liveness signal. Writing the entry for sixty seconds and relying on expiry to mean
- * "the extension died" was asking the store to carry a judgement it cannot make — and it would have
- * deleted the entry before the sweeper could record it as lost, which is the one outcome that mechanism
- * exists to prevent.
- */
+// Default timings, and the arithmetic behind each.
+//
+// ONE TTL, NOT TWO, BECAUSE NATS KV HAS ONE. Its TTL is a BUCKET setting — `CreateKeyValue(TTL: …)`,
+// applied once when the bucket is created — and `Update` resets it to that same bucket value. A per-key
+// lifetime cannot be expressed, so the two constants below are equal on purpose rather than by
+// coincidence: a running entry and a finished one both live a day, and what distinguishes them is
+// `State` and `RenewedAt`.
+//
+// THIS IS NOT A COMPROMISE, ONCE THE ROLES ARE SEPARATED. The TTL is the store's forgetting policy; the
+// heartbeat is the liveness signal. Writing the entry for sixty seconds and relying on expiry to mean
+// "the extension died" was asking the store to carry a judgement it cannot make — and it would have
+// deleted the entry before the sweeper could record it as lost, which is the one outcome that mechanism
+// exists to prevent.
 const (
 	// A day, matching DoneTTL — see the note above.
 	defaultRunningTTL = 24 * time.Hour
@@ -138,26 +130,22 @@ func (r *Registry) put(ctx context.Context, e Entry, ttl time.Duration) error {
 	return r.kv.Put(ctx, r.bucket, Key(e.Tenant, e.Session, e.ID), e, ttl)
 }
 
-/**
- * unmarshalEntry is the ONLY place a job becomes bytes or back.
- *
- * ONE DECODER, so the writer and every reader — the watcher, the sweeper, the client — cannot drift on
- * field names. A second decoder somewhere else is how a producer ends up emitting `exitCode` while a
- * consumer reads `exit_code`.
- */
+// unmarshalEntry is the ONLY place a job becomes bytes or back.
+//
+// ONE DECODER, so the writer and every reader — the watcher, the sweeper, the client — cannot drift on
+// field names. A second decoder somewhere else is how a producer ends up emitting `exitCode` while a
+// consumer reads `exit_code`.
 func unmarshalEntry(raw string, e *Entry) error { return json.Unmarshal([]byte(raw), e) }
 
 // marshalEntry exists for the sweeper's compare-and-set, which needs the bytes to hand to KVCas
 // rather than a value to write through the store.
 func marshalEntry(e Entry) ([]byte, error) { return json.Marshal(e) }
 
-/**
- * Start records a job as running and returns the handle that renews it.
- *
- * THE CALLER MUST CLOSE THE HANDLE. Until it is closed the entry is renewed, and a job
- * the extension has forgotten about would otherwise stay visible for as long as the
- * process lives — the opposite of what a heartbeat is for.
- */
+// Start records a job as running and returns the handle that renews it.
+//
+// THE CALLER MUST CLOSE THE HANDLE. Until it is closed the entry is renewed, and a job
+// the extension has forgotten about would otherwise stay visible for as long as the
+// process lives — the opposite of what a heartbeat is for.
 func (r *Registry) Start(ctx context.Context, e Entry) (Handle, error) {
 	now := time.Now().UnixMilli()
 	e.State = StateRunning
@@ -247,25 +235,23 @@ func (h *Handle) KeepAlive(ctx context.Context) {
 		case <-h.state.done:
 			return
 		case <-t.C:
-			/**
-			 * RE-READ BEFORE WRITING, BECAUSE A RENEWAL CAN UNDO A CANCELLATION.
-			 *
-			 * `entry` is a copy taken at Start, so writing it back unconditionally restores
-			 * `state: running` over whatever somebody else recorded — every interval, forever. A
-			 * cancelled job then stays visible as running and keeps being renewed, which is worse
-			 * than not having a cancel at all.
-			 *
-			 * TWO MECHANISMS, and both are needed:
-			 *
-			 *   * `stopLiveHandle` closes the done channel before a cancel writes, which ends this
-			 *     loop — but only for a job THIS PROCESS owns.
-			 *   * this check covers the rest: a cancel from another replica, or an entry a sweeper
-			 *     marked lost.
-			 *
-			 * writeMu is what makes the in-process case exact. Closing `done` does not stop a
-			 * renewal that is already past its select; without the mutex that write could land
-			 * after the cancel and restore `running` for one interval.
-			 */
+			// RE-READ BEFORE WRITING, BECAUSE A RENEWAL CAN UNDO A CANCELLATION.
+			//
+			// `entry` is a copy taken at Start, so writing it back unconditionally restores
+			// `state: running` over whatever somebody else recorded — every interval, forever. A
+			// cancelled job then stays visible as running and keeps being renewed, which is worse
+			// than not having a cancel at all.
+			//
+			// TWO MECHANISMS, and both are needed:
+			//
+			//   * `stopLiveHandle` closes the done channel before a cancel writes, which ends this
+			//     loop — but only for a job THIS PROCESS owns.
+			//   * this check covers the rest: a cancel from another replica, or an entry a sweeper
+			//     marked lost.
+			//
+			// writeMu is what makes the in-process case exact. Closing `done` does not stop a
+			// renewal that is already past its select; without the mutex that write could land
+			// after the cancel and restore `running` for one interval.
 			h.state.reg.writeMu.Lock()
 			select {
 			case <-h.state.done:
@@ -300,14 +286,12 @@ func (h *Handle) KeepAlive(ctx context.Context) {
 	}
 }
 
-/**
- * Finish records a terminal state and stops renewing.
- *
- * THE TTL CHANGES HERE, from the short running one to the long finished one. That is the
- * whole reason the two exist: a running entry that stops being renewed is a corpse, and
- * should become visible as one quickly; a finished entry is a record, and should stay
- * readable for as long as anybody might look.
- */
+// Finish records a terminal state and stops renewing.
+//
+// THE TTL CHANGES HERE, from the short running one to the long finished one. That is the
+// whole reason the two exist: a running entry that stops being renewed is a corpse, and
+// should become visible as one quickly; a finished entry is a record, and should stay
+// readable for as long as anybody might look.
 func (h *Handle) Finish(ctx context.Context, state State, exitCode *int, reason string) error {
 	if h.state == nil || h.state.reg == nil {
 		return nil
@@ -348,22 +332,20 @@ func (r *Registry) Get(ctx context.Context, tenant, session, jobID string) (Entr
 	return e, ok, nil
 }
 
-/**
- * Put rewrites an entry, choosing the TTL from its state.
- *
- * IT EXISTS FOR CANCELLATION, which is the one thing that changes an entry from OUTSIDE the handle
- * that started it. The handle owns renewal and finishing; a cancel arrives on a different code path
- * and has no handle to call Finish on.
- *
- * A TERMINAL WRITE ALSO STOPS THE OWNING HANDLE. Without that the heartbeat keeps its own copy of
- * the entry and writes `running` back over the cancellation on its next tick — the cancel is recorded
- * and then silently undone, which is worse than refusing it. The handle is found by key, so this
- * stops renewal for a job this process owns whether or not the caller knew it did.
- *
- * THE TTL FOLLOWS THE STATE: a rewrite that leaves the job running gets the short one and keeps
- * needing renewal, and one that records an ending gets the long one. Getting this wrong in the
- * direction of "always long" would leave cancelled jobs renewed forever by nobody.
- */
+// Put rewrites an entry, choosing the TTL from its state.
+//
+// IT EXISTS FOR CANCELLATION, which is the one thing that changes an entry from OUTSIDE the handle
+// that started it. The handle owns renewal and finishing; a cancel arrives on a different code path
+// and has no handle to call Finish on.
+//
+// A TERMINAL WRITE ALSO STOPS THE OWNING HANDLE. Without that the heartbeat keeps its own copy of
+// the entry and writes `running` back over the cancellation on its next tick — the cancel is recorded
+// and then silently undone, which is worse than refusing it. The handle is found by key, so this
+// stops renewal for a job this process owns whether or not the caller knew it did.
+//
+// THE TTL FOLLOWS THE STATE: a rewrite that leaves the job running gets the short one and keeps
+// needing renewal, and one that records an ending gets the long one. Getting this wrong in the
+// direction of "always long" would leave cancelled jobs renewed forever by nobody.
 func (r *Registry) Put(ctx context.Context, e Entry) error {
 	ttl := r.RunningTTL
 	if e.State.Terminal() {
@@ -379,19 +361,17 @@ func (r *Registry) Put(ctx context.Context, e Entry) error {
 	return r.put(ctx, e, ttl)
 }
 
-/**
- * Watch streams one conversation's jobs: the current list first, then changes.
- *
- * THE INITIAL SNAPSHOT IS WHAT MAKES A PANEL OPEN INSTANTLY. A watch that only delivered
- * changes would show an empty list until something moved, which reads as "no jobs" when
- * the truth is "several, all running steadily".
- *
- * THE SNAPSHOT BOUNDARY IS KEPT, not thrown away. The bus marks the end of the retained
- * snapshot with one synthetic event; a client needs it to know when "here is what exists"
- * becomes "here is what changed", because only before that point is an ABSENT key evidence
- * of absence. Without the marker a client either renders a half-filled list or has to
- * guess how long to wait.
- */
+// Watch streams one conversation's jobs: the current list first, then changes.
+//
+// THE INITIAL SNAPSHOT IS WHAT MAKES A PANEL OPEN INSTANTLY. A watch that only delivered
+// changes would show an empty list until something moved, which reads as "no jobs" when
+// the truth is "several, all running steadily".
+//
+// THE SNAPSHOT BOUNDARY IS KEPT, not thrown away. The bus marks the end of the retained
+// snapshot with one synthetic event; a client needs it to know when "here is what exists"
+// becomes "here is what changed", because only before that point is an ABSENT key evidence
+// of absence. Without the marker a client either renders a half-filled list or has to
+// guess how long to wait.
 func (r *Registry) Watch(ctx context.Context, tenant, session string) (<-chan KvEvent, func(), error) {
 	ch, cancel, err := r.kv.Watch(ctx, r.bucket, SessionPrefix(tenant, session))
 	if err != nil {
@@ -430,10 +410,8 @@ type KvEvent struct {
 	HasValue bool
 	// Deleted means the key is gone — either it aged out, or its owner stopped renewing.
 	Deleted bool
-	/**
-	 * SnapshotDone marks the boundary between "what already exists" and "what changed".
-	 *
-	 * IT ARRIVES ONCE, and it arrives LAST of the snapshot. Everything after it is live.
-	 */
+	// SnapshotDone marks the boundary between "what already exists" and "what changed".
+	//
+	// IT ARRIVES ONCE, and it arrives LAST of the snapshot. Everything after it is live.
 	SnapshotDone bool
 }

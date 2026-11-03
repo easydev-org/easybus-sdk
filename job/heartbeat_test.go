@@ -10,17 +10,15 @@ import (
 	"github.com/easydev-org/easybus-sdk/bus"
 )
 
-/**
- * A CANCELLATION MUST NOT BE UNDONE BY THE HEARTBEAT.
- *
- * `Put` is how cancellation reaches the list, and it runs on a different code path than the handle
- * that renews the job. The handle holds a COPY of the entry taken at Start, so a renewal that writes
- * it back unconditionally restores `state: running` over the cancellation — every interval, forever.
- *
- * THE SYMPTOM IS THE WORST KIND: the cancel call succeeds, the panel shows the job stopped, and a
- * minute later it is running again because nobody was watching the list in between. A user concludes
- * the machine ignored them.
- */
+// A CANCELLATION MUST NOT BE UNDONE BY THE HEARTBEAT.
+//
+// `Put` is how cancellation reaches the list, and it runs on a different code path than the handle
+// that renews the job. The handle holds a COPY of the entry taken at Start, so a renewal that writes
+// it back unconditionally restores `state: running` over the cancellation — every interval, forever.
+//
+// THE SYMPTOM IS THE WORST KIND: the cancel call succeeds, the panel shows the job stopped, and a
+// minute later it is running again because nobody was watching the list in between. A user concludes
+// the machine ignored them.
 
 // memKV is a KV that remembers one key and its revision.
 type memKV struct {

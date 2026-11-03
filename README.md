@@ -7,6 +7,30 @@ tenant-namespaced subjects, and a KV/object-store side channel.
 
 Module: `github.com/easydev-org/easybus-sdk`
 
+## Why this is `easybus` and not `easyagent`
+
+**`easybus` IS THE PROTOCOL'S NAME, NOT THE PRODUCT'S.** Everything that depends on this module is an
+EasyAgent component — `easyagent`, and the gitdev, ops, playwright and sandbox extensions — so
+"easyagent-sdk" would describe the consumers accurately. It would also be wrong about the thing being
+named.
+
+The name is not only a repository title. It is the same word in three places a rename cannot reach
+cheaply:
+
+| where | value |
+|---|---|
+| module path | `github.com/easydev-org/easybus-sdk` |
+| protobuf package | `easybus.v1` |
+| **every NATS subject** | `easybus.<tenant>.<…>` |
+
+Renaming the module would mean editing the import path in five repositories and re-resolving every
+published tag. Renaming the subject prefix is worse: it is a **breaking wire change**, and an agent and
+an extension on different sides of it cannot see each other at all.
+
+So the split stays: **EasyAgent is the product, easybus is how its parts talk.** A transport layer with
+its own name is the ordinary arrangement — the alternative is a name that has to be explained every
+time the protocol and the product change at different speeds.
+
 ## Packages
 
 | Package | Role |

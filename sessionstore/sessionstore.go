@@ -31,47 +31,41 @@ type Store struct{ bus bus.Bus }
 // New returns a store over the given bus.
 func New(b bus.Bus) *Store { return &Store{bus: b} }
 
-/**
- * Key builds `t.<tenant>.s.<session>.<rest...>`.
- *
- * THE SEGMENTS ARE THERE TO BE WATCHED, not merely to be unique. Ordering from least to most specific
- * is what lets one conversation list its own entries with a single wildcard.
- *
- * THE SESSION IS ESCAPED, because a name containing a dot would otherwise add a segment: a session
- * called `a.b` would be written as `t.alice.s.a.b.<id>` and read back as session `a`, id `b.<id>` —
- * the write and the parse disagreeing about where the session ends. `protocol` already had the answer
- * and its own test; this is the same function, not a second opinion about it.
- *
- * THE REST IS NOT ESCAPED, and that is deliberate: those segments are the caller's ids, and a job id
- * like `sandbox-job.392f82df` is expected to be several tokens. It is exactly why the read prefix ends
- * in `>` — see Prefix.
- */
+// Key builds `t.<tenant>.s.<session>.<rest...>`.
+//
+// THE SEGMENTS ARE THERE TO BE WATCHED, not merely to be unique. Ordering from least to most specific
+// is what lets one conversation list its own entries with a single wildcard.
+//
+// THE SESSION IS ESCAPED, because a name containing a dot would otherwise add a segment: a session
+// called `a.b` would be written as `t.alice.s.a.b.<id>` and read back as session `a`, id `b.<id>` —
+// the write and the parse disagreeing about where the session ends. `protocol` already had the answer
+// and its own test; this is the same function, not a second opinion about it.
+//
+// THE REST IS NOT ESCAPED, and that is deliberate: those segments are the caller's ids, and a job id
+// like `sandbox-job.392f82df` is expected to be several tokens. It is exactly why the read prefix ends
+// in `>` — see Prefix.
 func Key(tenant, session string, rest ...string) string {
 	parts := append([]string{"t", protocol.EscapeKVSegment(tenant), "s", protocol.EscapeKVSegment(session)}, rest...)
 	return strings.Join(parts, ".")
 }
 
-/**
- * Prefix is the wildcard for everything belonging to one conversation.
- *
- * IT ENDS IN `>`, NOT `*`, AND THAT IS THE POINT. NATS subject wildcards are per TOKEN: `*` matches
- * exactly one, `>` matches one or more of the remaining. An entry whose id contains dots —
- * `sandbox-job.392f82df` — is two tokens, so a `*` prefix matched the first and then expected the
- * subject to end. The watch stayed live, the entries were written, and the list came back empty.
- */
+// Prefix is the wildcard for everything belonging to one conversation.
+//
+// IT ENDS IN `>`, NOT `*`, AND THAT IS THE POINT. NATS subject wildcards are per TOKEN: `*` matches
+// exactly one, `>` matches one or more of the remaining. An entry whose id contains dots —
+// `sandbox-job.392f82df` — is two tokens, so a `*` prefix matched the first and then expected the
+// subject to end. The watch stayed live, the entries were written, and the list came back empty.
 func Prefix(tenant, session string) string {
 	return Key(tenant, session) + ".>"
 }
 
-/**
- * Put writes a value with a TTL, creating or replacing.
- *
- * IT IS A PUT AND NOT "CREATE, THEN PUT ON FAILURE". `KVCreate` reports an existing key as `(0, nil)`
- * — the normal losing side of a claim race — so the fall-through never fires, the first write lands,
- * and every subsequent one is discarded in silence. For a list with a heartbeat that reads as "the
- * entry was written once and never renewed"; for a list without one it reads as "the count stopped
- * going up".
- */
+// Put writes a value with a TTL, creating or replacing.
+//
+// IT IS A PUT AND NOT "CREATE, THEN PUT ON FAILURE". `KVCreate` reports an existing key as `(0, nil)`
+// — the normal losing side of a claim race — so the fall-through never fires, the first write lands,
+// and every subsequent one is discarded in silence. For a list with a heartbeat that reads as "the
+// entry was written once and never renewed"; for a list without one it reads as "the count stopped
+// going up".
 func (s *Store) Put(ctx context.Context, bucket, key string, v any, ttl time.Duration) error {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -104,17 +98,15 @@ func (s *Store) Delete(ctx context.Context, bucket, key string) error {
 	return s.bus.KVDelete(ctx, bucket, key)
 }
 
-/**
- * CompareAndSwap replaces a value ONLY IF it is still at the revision the caller read.
- *
- * IT IS THE ONE OPERATION A LIST NEEDS THAT PUT CANNOT DO, and the reason is a race no amount of care at
- * the call site removes: two replicas both list the pending rows, both decide to consume them, and both
- * write. Put lets the second overwrite the first and the message is delivered TWICE — the exact thing a
- * queue must not do.
- *
- * It reports false for a lost race, which is not an error: somebody else claimed it, and that is the
- * correct outcome for the loser.
- */
+// CompareAndSwap replaces a value ONLY IF it is still at the revision the caller read.
+//
+// IT IS THE ONE OPERATION A LIST NEEDS THAT PUT CANNOT DO, and the reason is a race no amount of care at
+// the call site removes: two replicas both list the pending rows, both decide to consume them, and both
+// write. Put lets the second overwrite the first and the message is delivered TWICE — the exact thing a
+// queue must not do.
+//
+// It reports false for a lost race, which is not an error: somebody else claimed it, and that is the
+// correct outcome for the loser.
 func (s *Store) CompareAndSwap(ctx context.Context, bucket, key string, v any, revision uint64) (bool, error) {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -129,13 +121,11 @@ func (s *Store) CompareAndSwap(ctx context.Context, bucket, key string, v any, r
 	return rev != 0, nil
 }
 
-/**
- * Entry is one row read back from a list.
- *
- * THE VALUE IS LEFT ENCODED. Decoding belongs to the package that owns the type: this one knows the
- * bucket shape and nothing about what a job or a refusal means, and a store that decoded would need a
- * registry of every payload anyone might put in it.
- */
+// Entry is one row read back from a list.
+//
+// THE VALUE IS LEFT ENCODED. Decoding belongs to the package that owns the type: this one knows the
+// bucket shape and nothing about what a job or a refusal means, and a store that decoded would need a
+// registry of every payload anyone might put in it.
 type Entry struct {
 	Key      string
 	Value    string
@@ -145,17 +135,15 @@ type Entry struct {
 	SnapshotDone bool
 }
 
-/**
- * Watch streams a conversation's entries: the current list first, then changes.
- *
- * THE INITIAL SNAPSHOT IS WHAT MAKES A PANEL OPEN INSTANTLY. A watch that delivered only changes would
- * show an empty list until something moved — which reads as "there is nothing" when the truth is
- * "several, all steady".
- *
- * THE BOUNDARY IS PRESERVED rather than swallowed. A caller needs to know when "here is what exists"
- * becomes "here is what changed", because only before that point is an ABSENT key evidence of
- * absence. Without the marker a client either renders a half-filled list or guesses how long to wait.
- */
+// Watch streams a conversation's entries: the current list first, then changes.
+//
+// THE INITIAL SNAPSHOT IS WHAT MAKES A PANEL OPEN INSTANTLY. A watch that delivered only changes would
+// show an empty list until something moved — which reads as "there is nothing" when the truth is
+// "several, all steady".
+//
+// THE BOUNDARY IS PRESERVED rather than swallowed. A caller needs to know when "here is what exists"
+// becomes "here is what changed", because only before that point is an ABSENT key evidence of
+// absence. Without the marker a client either renders a half-filled list or guesses how long to wait.
 func (s *Store) Watch(ctx context.Context, bucket, prefix string) (<-chan Entry, func(), error) {
 	ch, cancel, err := s.bus.KvWatch(ctx, bucket, prefix)
 	if err != nil {
@@ -179,14 +167,12 @@ func (s *Store) Watch(ctx context.Context, bucket, prefix string) (<-chan Entry,
 	return out, cancel, nil
 }
 
-/**
- * List returns the snapshot and stops — the entries that exist now, not a subscription.
- *
- * FOR A CALLER THAT ANSWERS ONE QUESTION. A page asking "what is running" once does not want a stream
- * it has to tear down; a page that wants the list to change under it calls Watch.
- *
- * THE SNAPSHOT ENDS THE LOOP, so a busy bucket cannot keep this call from returning.
- */
+// List returns the snapshot and stops — the entries that exist now, not a subscription.
+//
+// FOR A CALLER THAT ANSWERS ONE QUESTION. A page asking "what is running" once does not want a stream
+// it has to tear down; a page that wants the list to change under it calls Watch.
+//
+// THE SNAPSHOT ENDS THE LOOP, so a busy bucket cannot keep this call from returning.
 func (s *Store) List(ctx context.Context, bucket, prefix string) ([]Entry, error) {
 	ch, cancel, err := s.Watch(ctx, bucket, prefix)
 	if err != nil {
@@ -205,4 +191,3 @@ func (s *Store) List(ctx context.Context, bucket, prefix string) ([]Entry, error
 	}
 	return out, nil
 }
-

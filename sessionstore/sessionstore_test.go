@@ -10,12 +10,10 @@ import (
 	"github.com/easydev-org/easybus-sdk/bus"
 )
 
-/**
- * THIS PACKAGE EXISTS BECAUSE TWO LISTS MADE THE SAME TWO MISTAKES.
- *
- * So its tests are about those mistakes, not about JSON round-tripping. Each one below corresponds to
- * a bug that shipped: a wildcard that matched one token, and a write that stopped after the first.
- */
+// THIS PACKAGE EXISTS BECAUSE TWO LISTS MADE THE SAME TWO MISTAKES.
+//
+// So its tests are about those mistakes, not about JSON round-tripping. Each one below corresponds to
+// a bug that shipped: a wildcard that matched one token, and a write that stopped after the first.
 
 // fakeKV records every call, so "did the write happen" is a number rather than an inference.
 type fakeKV struct {
@@ -62,15 +60,13 @@ func (f *fakeKV) KVCreate(_ context.Context, _, key, value string, _ int64) (int
 	return 1, nil
 }
 
-/**
- * PUT WRITES EVERY TIME, EVEN WHEN THE KEY EXISTS.
- *
- * A create reports an existing key as `(0, nil)` — the normal losing side of a claim race — so
- * "create, then put on failure" never reaches the put. For a heartbeat that means the entry is written
- * once and never renewed: jobs appeared in the list and were marked lost while still running.
- *
- * THIS TEST FAILS IF SOMEBODY REINTRODUCES THE OPTIMISATION, which looks like an optimisation.
- */
+// PUT WRITES EVERY TIME, EVEN WHEN THE KEY EXISTS.
+//
+// A create reports an existing key as `(0, nil)` — the normal losing side of a claim race — so
+// "create, then put on failure" never reaches the put. For a heartbeat that means the entry is written
+// once and never renewed: jobs appeared in the list and were marked lost while still running.
+//
+// THIS TEST FAILS IF SOMEBODY REINTRODUCES THE OPTIMISATION, which looks like an optimisation.
 func TestPutWritesEvenWhenTheKeyExists(t *testing.T) {
 	kv := newFakeKV()
 	s := New(kv)
@@ -91,13 +87,11 @@ func TestPutWritesEvenWhenTheKeyExists(t *testing.T) {
 	}
 }
 
-/**
- * THE PREFIX MATCHES THE WHOLE REST OF THE KEY.
- *
- * NATS wildcards are per TOKEN: `*` is one, `>` is the remaining any number. A list whose ids contain
- * dots — `sandbox-job.392f82df` — is therefore invisible to a `*` prefix, and the failure is silent:
- * the entries are written, the watch is live, the list is empty.
- */
+// THE PREFIX MATCHES THE WHOLE REST OF THE KEY.
+//
+// NATS wildcards are per TOKEN: `*` is one, `>` is the remaining any number. A list whose ids contain
+// dots — `sandbox-job.392f82df` — is therefore invisible to a `*` prefix, and the failure is silent:
+// the entries are written, the watch is live, the list is empty.
 func TestPrefixMatchesAMultiSegmentKey(t *testing.T) {
 	p := Prefix("alice", "s1")
 	if !strings.HasSuffix(p, ".>") {
@@ -120,17 +114,15 @@ func TestKeySegmentsAreOrderedGeneralToSpecific(t *testing.T) {
 	}
 }
 
-/**
- * A SESSION NAME WITH A DOT MUST NOT SPLIT THE KEY.
- *
- * `a.b` written unescaped becomes `t.alice.s.a.b.<id>`, and a reader splitting on dots would take the
- * session as `a` and the id as `b.<id>` — the write and the parse disagreeing about where the session
- * ends. The entry exists and is simply never found, which is the same silent shape as the `*` wildcard
- * bug: nothing errors, the list is short by one.
- *
- * `protocol` already escaped this for subscription keys and had a test for it. This code did not, which
- * is what 「two implementations of one shape」 costs.
- */
+// A SESSION NAME WITH A DOT MUST NOT SPLIT THE KEY.
+//
+// `a.b` written unescaped becomes `t.alice.s.a.b.<id>`, and a reader splitting on dots would take the
+// session as `a` and the id as `b.<id>` — the write and the parse disagreeing about where the session
+// ends. The entry exists and is simply never found, which is the same silent shape as the `*` wildcard
+// bug: nothing errors, the list is short by one.
+//
+// `protocol` already escaped this for subscription keys and had a test for it. This code did not, which
+// is what 「two implementations of one shape」 costs.
 func TestKeyEscapesTheSessionName(t *testing.T) {
 	plain := Key("alice", "a.b", "id1")
 	if plain == "t.alice.s.a.b.id1" {

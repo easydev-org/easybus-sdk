@@ -399,17 +399,15 @@ func (e *Extension) GetSessionVariable(ctx context.Context, tenant, provider, se
 // applyConfigKV applies a cfg-bucket watch entry into the local store. Key
 // layout: <extId>.<name> (global) or <extId>.<session>.<name> (session).
 func (e *Extension) applyConfigKV(ev bus.KvEvent) {
-	/**
-	 * THE SNAPSHOT BOUNDARY IS NOT A CONFIG KEY.
-	 *
-	 * A KV watch delivers the retained entries, then ONE synthetic event with an empty key to say "that
-	 * is the initial state". This function saw it as a key, failed the `t.<tenant>.<extId>.<name>` shape
-	 * check, and logged `config key shape not recognised key=""` on every extension start — a warning
-	 * about a message that was working correctly.
-	 *
-	 * Silencing it is not cosmetic: an operator reading startup logs learns to ignore that line, and the
-	 * same line is what a REAL malformed key would produce.
-	 */
+	// THE SNAPSHOT BOUNDARY IS NOT A CONFIG KEY.
+	//
+	// A KV watch delivers the retained entries, then ONE synthetic event with an empty key to say "that
+	// is the initial state". This function saw it as a key, failed the `t.<tenant>.<extId>.<name>` shape
+	// check, and logged `config key shape not recognised key=""` on every extension start — a warning
+	// about a message that was working correctly.
+	//
+	// Silencing it is not cosmetic: an operator reading startup logs learns to ignore that line, and the
+	// same line is what a REAL malformed key would produce.
 	if ev.Done {
 		return
 	}
