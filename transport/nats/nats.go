@@ -32,7 +32,12 @@ const (
 	streamChannels  = "EASYBUS_CHANNELS"
 	channelWildcard = "easybus.*.channel.>"
 	inboxWildcard   = "easybus.*.mailbox.>"
-	eventsWildcard  = "easybus.*.session.events.>"
+	// WAKE IS ITS OWN SUBJECT (see protocol.ChWake) BUT THE SAME STREAM. It is the same kind of thing —
+	// a durable notification that must not be dropped — and a second stream would need its own limits,
+	// its own reconciliation and its own replica count for no benefit. Two subjects in one stream is
+	// what makes both survive a restart with the machinery already here.
+	wakeWildcard   = "easybus.*.wake.>"
+	eventsWildcard = "easybus.*.session.events.>"
 	// EASYBUS_EVENTS also carries session lifecycle + session-changed (matches the
 	// TS SDK). Omitting these made ensureStreams DOWNGRADE the stream to only
 	// events, dropping the agent's session.changed/lifecycle publishes
@@ -211,7 +216,7 @@ func ensureStreams(js nats.JetStreamContext, opts Options) error {
 		// log. A message that is dropped because the stream hit a limit is a prompt that never
 		// runs — the one thing here that must not be lost.
 		{streamChannels, []string{channelWildcard}, maxMsgs},
-		{streamMailbox, []string{inboxWildcard}, -1},
+		{streamMailbox, []string{inboxWildcard, wakeWildcard}, -1},
 		{streamEvents, []string{eventsWildcard, lifecycleWildcard, changedWildcard}, maxMsgs},
 		{streamDLQ, []string{dlqWildcard}, 10_000},
 	}
