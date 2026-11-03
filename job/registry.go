@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/easydev-org/easybus-sdk/bus"
@@ -25,7 +26,7 @@ import (
  * remember to check.
  */
 type Registry struct {
-	kv     *sessionstore.Store
+	kv *sessionstore.Store
 	// bus is kept for the ONE operation sessionstore does not offer: a compare-and-set. CAS is not
 	// part of "read and write a list" — it is how the sweeper avoids overwriting a renewal that landed
 	// between its read and its write — so it stays here rather than becoming a shape every list has
@@ -52,6 +53,31 @@ type Registry struct {
 	StaleAfter time.Duration
 	// DoneTTL is how long a finished entry stays readable.
 	DoneTTL time.Duration
+
+	/**
+	 * live maps a bucket key to the handle renewing it IN THIS PROCESS.
+	 *
+	 * IT EXISTS SO A CANCELLATION CAN STOP THE HEARTBEAT EXACTLY, not eventually. `Put` arrives
+	 * on a different code path than the handle that owns the job, so without this map the
+	 * heartbeat would keep writing `running` over the cancellation until it noticed on its next
+	 * tick — and if nobody ever noticed, forever.
+	 */
+	mu   sync.Mutex
+	live map[string]Handle
+
+	/**
+	 * writeMu serialises RENEWAL against a TERMINAL WRITE.
+	 *
+	 * Both happen in this process — cancellation reaches `Put` through a tool handler, and the
+	 * heartbeat is a goroutine here — so a mutex makes them exact rather than eventually correct.
+	 * `stopLiveHandle` closes the done channel, but a renewal that is already past its select will
+	 * still write once afterwards; that write lands between the cancel and the reader's next look,
+	 * and it says `running`.
+	 *
+	 * Holding this across the check and the write means a terminal write cannot be overtaken: the
+	 * renewal either finishes first (and is then overwritten, correctly), or waits and sees `done`.
+	 */
+	writeMu sync.Mutex
 }
 
 /**
@@ -142,15 +168,66 @@ func (r *Registry) Start(ctx context.Context, e Entry) (Handle, error) {
 	if err := r.put(ctx, e, r.RunningTTL); err != nil {
 		return Handle{}, err
 	}
-	return Handle{reg: r, entry: e, done: make(chan struct{})}, nil
+	h := Handle{state: &handleState{reg: r, entry: e, done: make(chan struct{}), key: Key(e.Tenant, e.Session, e.ID)}}
+	r.track(h)
+	return h, nil
 }
 
 // Handle renews one running entry until it is finished or abandoned.
+//
+// IT IS A POINTER TO SHARED STATE, not a value holding it. `Start` returns this handle by value and
+// also registers it in `Registry.live` so a cancellation can stop it; if the fields lived in the
+// struct, the caller's copy and the registry's copy would each have their own `stopOnce` while
+// sharing one channel — and stopping through both paths closes that channel twice.
 type Handle struct {
+	state *handleState
+}
+
+type handleState struct {
 	reg   *Registry
 	entry Entry
-	done  chan struct{}
-	once  bool
+	// key is the bucket key, kept so Registry can find this handle from a Put that
+	// arrived on a different code path (cancellation) and stop it.
+	key string
+	// stopOnce guards `done` against a second close. Finish stops the loop and then writes
+	// through Put, which stops it again on the way.
+	stopOnce sync.Once
+	done     chan struct{}
+}
+
+// track registers a live handle so an external terminal write can stop it.
+func (r *Registry) track(h Handle) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.live == nil {
+		r.live = make(map[string]Handle)
+	}
+	r.live[h.state.key] = h
+}
+
+// untrack forgets a handle. Called by stop, so a finished job cannot be reached again.
+func (r *Registry) untrack(h Handle) {
+	if h.state.key == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.live[h.state.key]; ok && cur.state == h.state {
+		delete(r.live, h.state.key)
+	}
+}
+
+// stopLiveHandle stops the handle renewing the given key, if this process owns one.
+//
+// THE CROSS-PROCESS CASE IS NOT THIS. A cancel for a job this process did not start has no
+// handle here to stop, and the state check in KeepAlive covers it — see the note there.
+func (r *Registry) stopLiveHandle(key string) {
+	r.mu.Lock()
+	h, ok := r.live[key]
+	r.mu.Unlock()
+	if ok {
+		h.stop()
+	}
 }
 
 // KeepAlive renews the entry every RenewEvery until ctx ends or Finish is called.
@@ -158,24 +235,66 @@ type Handle struct {
 // RUN IT IN A GOROUTINE. It blocks, and it is meant to: the reason to have a heartbeat is
 // that somebody is still there, and that is only true while the work is being done.
 func (h *Handle) KeepAlive(ctx context.Context) {
-	if h.reg == nil {
+	if h.state == nil || h.state.reg == nil {
 		return
 	}
-	t := time.NewTicker(h.reg.RenewEvery)
+	t := time.NewTicker(h.state.reg.RenewEvery)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-h.done:
+		case <-h.state.done:
 			return
 		case <-t.C:
-			h.entry.RenewedAt = time.Now().UnixMilli()
-			if err := h.reg.put(ctx, h.entry, h.reg.RunningTTL); err != nil {
+			/**
+			 * RE-READ BEFORE WRITING, BECAUSE A RENEWAL CAN UNDO A CANCELLATION.
+			 *
+			 * `entry` is a copy taken at Start, so writing it back unconditionally restores
+			 * `state: running` over whatever somebody else recorded — every interval, forever. A
+			 * cancelled job then stays visible as running and keeps being renewed, which is worse
+			 * than not having a cancel at all.
+			 *
+			 * TWO MECHANISMS, and both are needed:
+			 *
+			 *   * `stopLiveHandle` closes the done channel before a cancel writes, which ends this
+			 *     loop — but only for a job THIS PROCESS owns.
+			 *   * this check covers the rest: a cancel from another replica, or an entry a sweeper
+			 *     marked lost.
+			 *
+			 * writeMu is what makes the in-process case exact. Closing `done` does not stop a
+			 * renewal that is already past its select; without the mutex that write could land
+			 * after the cancel and restore `running` for one interval.
+			 */
+			h.state.reg.writeMu.Lock()
+			select {
+			case <-h.state.done:
+				h.state.reg.writeMu.Unlock()
+				return
+			default:
+			}
+			cur, found, err := h.state.reg.Get(ctx, h.state.entry.Tenant, h.state.entry.Session, h.state.entry.ID)
+			if err != nil {
+				h.state.reg.writeMu.Unlock()
+				// A FAILED READ IS NOT A FAILED RENEWAL, so it does not stop the heartbeat: the bus
+				// being briefly unreachable says nothing about whether this job is alive.
+				slog.WarnContext(ctx, "job: renew could not read the entry", "svc", "job", "job", h.state.entry.ID, "err", err)
+				continue
+			}
+			if found && (cur.State != StateRunning || cur.ExtID != h.state.entry.ExtID) {
+				h.state.reg.writeMu.Unlock()
+				// Somebody else has decided this job's fate. Do not argue.
+				h.stop()
+				return
+			}
+			h.state.entry.RenewedAt = time.Now().UnixMilli()
+			err = h.state.reg.put(ctx, h.state.entry, h.state.reg.RunningTTL)
+			h.state.reg.writeMu.Unlock()
+			if err != nil {
 				// A FAILED RENEWAL IS NOT AN ERROR TO ACT ON. The entry will lapse, and
 				// the sweeper will record it as lost — which is the correct outcome for
 				// an extension that cannot reach the bus. Logged, not fatal.
-				slog.WarnContext(ctx, "job: renew failed", "svc", "job", "job", h.entry.ID, "err", err)
+				slog.WarnContext(ctx, "job: renew failed", "svc", "job", "job", h.state.entry.ID, "err", err)
 			}
 		}
 	}
@@ -190,26 +309,33 @@ func (h *Handle) KeepAlive(ctx context.Context) {
  * readable for as long as anybody might look.
  */
 func (h *Handle) Finish(ctx context.Context, state State, exitCode *int, reason string) error {
-	if h.reg == nil {
+	if h.state == nil || h.state.reg == nil {
 		return nil
 	}
 	h.stop()
-	e := h.entry
+	e := h.state.entry
 	e.State = state
 	e.ExitCode = exitCode
 	e.Reason = reason
 	e.FinishedAt = time.Now().UnixMilli()
 	e.RenewedAt = e.FinishedAt
-	return h.reg.put(ctx, e, h.reg.DoneTTL)
+	if state.Terminal() {
+		// A FINISHED JOB IS NOT CANCELLABLE. `Cancelable` describes whether a cancel could do
+		// anything, and after the ending the answer is no — leaving the mode set made every
+		// reader re-derive that from the state, and one that forgot drew a button that did nothing.
+		e.CancelMode = CancelNone
+	}
+	return h.state.reg.Put(ctx, e)
 }
 
-// stop closes the renew loop exactly once.
+// stop closes the renew loop exactly once, and stops the registry from finding this handle.
 func (h *Handle) stop() {
-	if h.once {
-		return
-	}
-	h.once = true
-	close(h.done)
+	h.state.stopOnce.Do(func() {
+		close(h.state.done)
+		if h.state.reg != nil {
+			h.state.reg.untrack(*h)
+		}
+	})
 }
 
 // Get reads one entry.
@@ -229,6 +355,11 @@ func (r *Registry) Get(ctx context.Context, tenant, session, jobID string) (Entr
  * that started it. The handle owns renewal and finishing; a cancel arrives on a different code path
  * and has no handle to call Finish on.
  *
+ * A TERMINAL WRITE ALSO STOPS THE OWNING HANDLE. Without that the heartbeat keeps its own copy of
+ * the entry and writes `running` back over the cancellation on its next tick — the cancel is recorded
+ * and then silently undone, which is worse than refusing it. The handle is found by key, so this
+ * stops renewal for a job this process owns whether or not the caller knew it did.
+ *
  * THE TTL FOLLOWS THE STATE: a rewrite that leaves the job running gets the short one and keeps
  * needing renewal, and one that records an ending gets the long one. Getting this wrong in the
  * direction of "always long" would leave cancelled jobs renewed forever by nobody.
@@ -237,6 +368,13 @@ func (r *Registry) Put(ctx context.Context, e Entry) error {
 	ttl := r.RunningTTL
 	if e.State.Terminal() {
 		ttl = r.DoneTTL
+		// THE SAME LOCK AS THE HEARTBEAT, so the pair is atomic: either a renewal finishes first
+		// and this write replaces it, or this write lands and the renewal sees `done` and stops.
+		r.writeMu.Lock()
+		defer r.writeMu.Unlock()
+		// STOP BEFORE WRITING. A renewal landing between the write and the stop would restore
+		// `running` over the ending we just recorded.
+		r.stopLiveHandle(Key(e.Tenant, e.Session, e.ID))
 	}
 	return r.put(ctx, e, ttl)
 }
