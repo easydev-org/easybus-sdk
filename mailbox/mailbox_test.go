@@ -229,7 +229,7 @@ func TestSessionsWithPendingFindsTheRightConversations(t *testing.T) {
 
 	// NARROWED TO THE TYPES THAT WAKE A TURN: s2's `event` is context-only, and starting a turn for it
 	// would be a turn about nothing.
-	got, err := q.SessionsWithPending(ctx, []string{"trigger"})
+	got, err := q.SessionsWithPending(ctx, []Type{Trigger})
 	if err != nil {
 		t.Fatal(err)
 	}
