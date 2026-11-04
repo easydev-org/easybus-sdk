@@ -352,13 +352,68 @@ func (b *Bus) AuditReplicas() ([]ReplicaAudit, error) {
 	return out, nil
 }
 
+// signedFields derives the HMAC's covered fields FROM THE ENCODED ENVELOPE.
+//
+// BOTH SIDES MUST DERIVE THEM THE SAME WAY, and that is the whole point of this function: signing
+// used to read the CALLER'S Go value (`Payload: payload`) while verification read the payload back
+// out of the structpb that buildEnvelope had already produced. Those are two different JSON
+// renderings of the same intent, and they disagreed:
+//
+//	struct{Text "hi", N 1}  signs as {"text":"hi","n":1}
+//	                        verifies as {"n":1,"text":"hi"}   // structpb orders keys
+//	int64 9007199254740993  signs as 9007199254740993
+//	                        verifies as 9007199254740992  // structpb has only a double
+//
+// So a message did not verify against its own signature, in the same process, with the same value.
+// Deriving from the encoded bytes removes the possibility instead of documenting it: there is one
+// representation in play, and it is the one that travels.
+func signedFields(data []byte, subject string) (identity.Fields, bool) {
+	env := &easybusv1.Envelope{}
+	if err := proto.Unmarshal(data, env); err != nil {
+		return identity.Fields{}, false
+	}
+	// THE PAYLOAD IS ITS JSON RENDERING, NOT THE PROTOBUF BYTES: proto.Marshal is not deterministic
+	// across field ordering in the general case, and a signature over it would depend on an
+	// implementation detail of the marshaller rather than on the message.
+	var body json.RawMessage
+	if env.Payload != nil {
+		raw, err := env.Payload.MarshalJSON()
+		if err != nil {
+			return identity.Fields{}, false
+		}
+		body = raw
+	}
+	return identity.Fields{
+		Tenant: env.Tenant,
+		// THE SUBJECT FROM THE MESSAGE, not env.Ch: they are set to the same string by
+		// buildEnvelope, but the subject is what actually routes the message, so it is what a
+		// signature has to cover.
+		Ch: subject,
+		// `easybus.EnvelopeKindString`, NOT `GetKind().String()`: the latter is the protobuf enum
+		// NAME ("KIND_QUEUE") while the signed word is the transport one ("queue"). The two must be
+		// the same string or every signature fails against its own message.
+		Kind:    easybus.EnvelopeKindString(env.GetKind()),
+		ID:      env.GetId(),
+		Payload: body,
+	}, true
+}
+
 // signMsg attaches the identity HMAC to a NATS message's headers (opt-in;
 // nil identity = no-op).
-func (b *Bus) signMsg(msg *nats.Msg, ch, kind, id string, payload any) {
+//
+// IT SIGNS THE MESSAGE IT IS ABOUT TO SEND, not the arguments that produced it — see signedFields.
+func (b *Bus) signMsg(msg *nats.Msg) {
 	if b.idn == nil {
 		return
 	}
-	h := identity.AuthHeader(*b.idn, identity.Fields{Tenant: envelopeTenant(msg.Data), Ch: ch, Kind: kind, ID: id, Payload: payload})
+	fields, ok := signedFields(msg.Data, msg.Subject)
+	if !ok {
+		// An envelope that cannot be read cannot be signed meaningfully. Leaving the headers off
+		// makes the receiver reject it, which is the honest outcome; signing a partial view would
+		// produce a signature that verifies against nothing that was sent.
+		return
+	}
+	h := identity.AuthHeader(*b.idn, fields)
 	if msg.Header == nil {
 		msg.Header = nats.Header{}
 	}
@@ -368,10 +423,6 @@ func (b *Bus) signMsg(msg *nats.Msg, ch, kind, id string, payload any) {
 
 // verifyMsg checks easybus-id/easybus-sig headers (opt-in; nil identity = always
 // true). Returns false for missing/invalid signatures.
-//
-// IT SIGNS THE SERIALISED BYTES AS THE ENVELOPE DEFINES THEM. The signature covers payload + kind + id
-// + tenant + ch, and the payload's wire form is now the protobuf one; signing a JSON rendering of it
-// while sending protobuf would make every signature fail against its own message.
 func (b *Bus) verifyMsg(m *nats.Msg) bool {
 	if b.idn == nil {
 		return true
@@ -380,37 +431,11 @@ func (b *Bus) verifyMsg(m *nats.Msg) bool {
 	if sig == "" {
 		return false
 	}
-	env := &easybusv1.Envelope{}
-	if err := proto.Unmarshal(m.Data, env); err != nil {
+	fields, ok := signedFields(m.Data, m.Subject)
+	if !ok {
 		return false
 	}
-	// THE SIGNED PAYLOAD IS ITS JSON RENDERING, NOT THE PROTOBUF BYTES: proto.Marshal is not
-	// deterministic across field ordering in the general case, and a signature over it would depend on
-	// an implementation detail of the marshaller rather than on the message.
-	var body json.RawMessage
-	if env.Payload != nil {
-		if raw, err := env.Payload.MarshalJSON(); err == nil {
-			body = raw
-		}
-	}
-	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret,
-		identity.Fields{
-			// `easybus.EnvelopeKindString`, NOT `GetKind().String()`: the latter is the protobuf enum
-			// NAME ("KIND_QUEUE") while the header is signed with the transport word ("queue"). The two
-			// must be the same string or every signature fails against its own message.
-			Tenant: env.Tenant, Ch: m.Subject, Kind: easybus.EnvelopeKindString(env.GetKind()),
-			ID: env.GetId(), Payload: body,
-		}, sig)
-}
-
-// envelopeTenant reads just the tenant field out of an already-encoded
-// envelope (used for signing).
-func envelopeTenant(data []byte) string {
-	env := &easybusv1.Envelope{}
-	if proto.Unmarshal(data, env) != nil {
-		return ""
-	}
-	return env.Tenant
+	return identity.Verify(m.Header.Get("easybus-id"), b.idn.Secret, fields, sig)
 }
 
 func sameSubjects(a, b []string) bool {
@@ -562,7 +587,7 @@ func (b *Bus) Request(ctx context.Context, ch string, payload any, opts bus.Requ
 	if b.idn != nil {
 		rm := nats.NewMsg(ch)
 		rm.Data = data
-		b.signMsg(rm, ch, "req", "", payload)
+		b.signMsg(rm)
 		m, err = b.nc.RequestMsgWithContext(ctx, rm)
 		if err != nil {
 			return nil, err
@@ -596,9 +621,7 @@ func (b *Bus) RequestMany(ctx context.Context, ch string, payload any, opts bus.
 	msg := nats.NewMsg(ch)
 	msg.Data = data
 	msg.Reply = inbox
-	if b.idn != nil {
-		b.signMsg(msg, ch, "req", "", payload)
-	}
+	b.signMsg(msg)
 	if err := b.nc.PublishMsg(msg); err != nil {
 		return nil, err
 	}
@@ -636,7 +659,7 @@ func (b *Bus) Publish(ctx context.Context, ch string, payload any, opts bus.Publ
 	if opts.ReplyTo != "" {
 		msg.Reply = opts.ReplyTo
 	}
-	b.signMsg(msg, ch, "pub", "", payload)
+	b.signMsg(msg)
 	return b.nc.PublishMsg(msg)
 }
 
@@ -690,7 +713,14 @@ func (b *Bus) InboxPublish(ctx context.Context, ch string, payload any, opts bus
 	if err != nil {
 		return err
 	}
-	_, err = b.js.Publish(ch, data, nats.MsgId(opts.ID))
+	// A MESSAGE HANDLER, NOT js.Publish. `js.Publish(subject, data)` takes no headers, so this path
+	// could not be signed at all — and it carries the mailbox, the wake, the extension file RPCs and
+	// every session event. With identity enabled, `verifyMsg` rejected all of them for a missing
+	// signature and dropped them without an error, which is the shape of a silently mute agent.
+	msg := nats.NewMsg(ch)
+	msg.Data = data
+	b.signMsg(msg)
+	_, err = b.js.PublishMsg(msg, nats.MsgId(opts.ID))
 	return err
 }
 
@@ -728,7 +758,7 @@ func (b *Bus) InboxConsume(ctx context.Context, opts bus.InboxConsumeOpts) (bus.
 	if err != nil {
 		return nil, err
 	}
-	return &inboxSub{js: b.js, subject: subject, durable: durable, subOpts: subOpts, sub: sub}, nil
+	return &inboxSub{js: b.js, subject: subject, durable: durable, subOpts: subOpts, sub: sub, bus: b}, nil
 }
 
 // fetch pulls one message, holding the lock so a concurrent recreate cannot swap the
@@ -768,6 +798,10 @@ type inboxSub struct {
 	subject string
 	durable string
 	subOpts []nats.SubOpt
+	// bus supplies the identity used to verify each delivered message. Without it this consumer
+	// could not check signatures at all, so the delivery path would accept what a core
+	// subscription rejects.
+	bus *Bus
 
 	mu  sync.Mutex
 	sub *nats.Subscription
@@ -808,6 +842,19 @@ func (s *inboxSub) Next(ctx context.Context) (*bus.InboxMsg, bool) {
 		return nil, false
 	}
 	m := msgs[0]
+	// A DURABLE MESSAGE IS VERIFIED LIKE ANY OTHER. This path used to skip the check entirely, so —
+	// once the publisher could actually sign — an unauthenticated message would have been accepted
+	// here while a core subscription refused it. Signing one path and verifying only the other is
+	// worse than doing neither: it reads as protection that does not protect the delivery path, which
+	// is the one carrying triggers.
+	if s.bus.idn != nil && !s.bus.verifyMsg(m) {
+		// ACK IT, DO NOT NAK. Redelivering a message that cannot verify would loop forever and
+		// block every other message behind it; the sender is the thing that is wrong, not the
+		// broker. Logged so a misconfigured peer is visible rather than looking like a lost message.
+		log.Printf("[easybus] inbox message on %q failed signature verification; dropped", s.subject)
+		_ = m.Term()
+		return nil, false
+	}
 	env, err := decode(m)
 	if err != nil {
 		return nil, false
