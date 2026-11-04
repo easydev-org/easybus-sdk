@@ -59,7 +59,7 @@ type Registry struct {
 }
 
 // NewRegistry returns a registry over the shared denials bucket.
-func NewRegistry(b bus.Bus) *Registry {
+func NewRegistry(b bus.KeyValue) *Registry {
 	return &Registry{kv: sessionstore.New(b), bucket: DefaultBucket, ttl: DefaultTTL}
 }
 

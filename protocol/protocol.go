@@ -93,6 +93,20 @@ const (
 func ChToolCall(tenant, extID, tool string) string {
 	return TenantPrefix(tenant) + "tool.call." + extID + "." + tool
 }
+
+// ChToolProgress carries a running tool's in-flight output.
+//
+// IT IS A CORE NATS SUBJECT, NOT A DURABLE ONE, and that is the design rather than an oversight: a
+// progress frame is a view of work happening NOW. The durability a client needs is provided
+// downstream, where the turn re-emits each frame onto the session's event stream — so a reconnect
+// replays what was shown without this subject retaining anything.
+//
+// ONE HOP, ONE READER. The turn subscribes per call while the tool runs and stops when it returns,
+// which is why the frame carries no sequence: no consumer arrives late.
+//
+// THE MODEL NEVER SEES THESE. They go to the session's event stream for the client to render; the
+// model receives only the tool's final result. See agent.Deps.ToolProgress for why that separation is
+// a contract and not an optimisation.
 func ChToolProgress(tenant, callID string) string {
 	return TenantPrefix(tenant) + "tool.progress." + callID
 }

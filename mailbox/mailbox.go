@@ -14,6 +14,7 @@ package mailbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -44,6 +45,86 @@ const TTL = 24 * time.Hour
 
 // TTLMs is TTL in the unit the bus takes, exported so callers stop re-deriving it.
 func TTLMs() int64 { return TTL.Milliseconds() }
+
+/**
+ * Body is what a producer puts in Payload, read through one accessor.
+ *
+ * THREE SHAPES REACH THIS QUEUE and they were decoded at each use site, each with its own guess about
+ * field names: the API's prompt (`message_id` + `text`), a subsession hand-off (`text` only), and a
+ * channel event (channel/topic/source plus the event data, and a rendered `text` when the
+ * subscription wakes the session). Every one carries its human-readable form in `text`; only the
+ * prompt carries a logical id.
+ *
+ * THIS TYPE DOES NOT REPLACE THE WIRE SHAPE. Payload stays `any` because a producer may send fields
+ * this queue has never heard of, and discarding them would be worse than ignoring them. Body is the
+ * READ side: one place that knows a body may arrive as a Go struct, a map from JSON, or a JSON string
+ * from an older producer.
+ */
+type Body struct {
+	// MessageID is the producer's logical message id. Empty means "use the queue's row id", which is
+	// what a producer with no message of its own (a channel event, a resume nudge) leaves it as.
+	MessageID string    `json:"message_id"`
+	Text      string    `json:"text"`
+	FileRefs  []FileRef `json:"attachments,omitempty"`
+
+	// PROVENANCE, for a body that came from a channel.
+	//
+	// A channel event is rendered into `text` for the model, but the STRUCTURE is kept: a tool that
+	// wants to read the event itself instead of a sentence about it should not have to parse the
+	// sentence. These are empty on every other kind of body.
+	Channel string `json:"channel,omitempty"`
+	Topic   string `json:"topic,omitempty"`
+	Origin  string `json:"origin,omitempty"`
+	// Data is the channel event's payload, verbatim.
+	Data any `json:"data,omitempty"`
+}
+
+// FileRef is a resolved attachment reference.
+type FileRef struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+	Mime string `json:"mime"`
+	Size int    `json:"size"`
+}
+
+// BodyOf reads any accepted payload shape into a Body.
+//
+// THE ROUND TRIP IS DELIBERATE. A payload may be a struct (in-process), a map (from JSON over the
+// bus), or a JSON string (what the row-based queue used to store). Marshalling to JSON and decoding
+// back is the one conversion that handles all three, and it is bounded: the body is a message, not a
+// document.
+//
+// A NON-OBJECT PAYLOAD BECOMES TEXT RATHER THAN AN ERROR. An extension may publish a bare string, and
+// failing on it dropped the whole message — including the only thing it said. The string it sent is
+// the message it meant.
+func BodyOf(v any) (Body, error) {
+	var b Body
+	if v == nil {
+		return b, nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return b, fmt.Errorf("mailbox body: %w", err)
+	}
+	// A bare string, either as the payload itself or as a doubly-encoded body.
+	var asString string
+	if json.Unmarshal(raw, &asString) == nil {
+		trimmed := strings.TrimSpace(asString)
+		if !strings.HasPrefix(trimmed, "{") {
+			b.Text = asString
+			return b, nil
+		}
+		raw = []byte(trimmed)
+	}
+	if err := json.Unmarshal(raw, &b); err != nil {
+		// NOT AN OBJECT AND NOT A STRING: a number, a list, a bool. There is no text to read, and
+		// failing here would drop a message the producer sent in good faith — so the body is empty
+		// and the queue still delivers it. The TYPE says what to DO with a message; the body is only
+		// what to say, and "nothing" is a legitimate thing to say.
+		return Body{}, nil
+	}
+	return b, nil
+}
 
 // Type is what a mailbox message asks the runtime to do.
 //
@@ -81,8 +162,11 @@ type Message struct {
 	ID     string `json:"id"`
 	Type   Type   `json:"type"`
 	Source string `json:"source"`
-	// Payload is the body, handed to the fold unchanged. It stays `any` on purpose: an extension
-	// publishes its own shape, and this queue must not need to know it.
+	// Payload is the body, handed to the fold unchanged.
+	//
+	// IT STAYS `any` ON THE WIRE, and that is not laziness: an extension publishes JSON this queue has
+	// no schema for, and a type here would be a schema the queue enforced on someone else's data. What
+	// it does NOT mean is that every consumer has to guess the shape — see Body.
 	Payload any `json:"payload"`
 	// Status is Pending until a drain claims it, then Consumed. The key is never deleted, so a UI can
 	// still answer "was my message picked up" after it has been.
@@ -106,7 +190,12 @@ func (m Message) IsPending() bool { return m.Status == Pending }
 type Queue struct{ kv *sessionstore.Store }
 
 // New returns a queue over the given bus.
-func New(b bus.Bus) *Queue { return &Queue{kv: sessionstore.New(b)} }
+//
+// IT TAKES KeyValue, NOT Bus. The queue is a list in a bucket — enqueue puts a key, drain reads the
+// prefix and compare-and-swaps each row to claim it — and it does not publish, consume, or store
+// objects. Saying so in the signature is what lets a test supply five methods instead of nineteen,
+// and what stops this package from acquiring a use for the transport it has no business having.
+func New(b bus.KeyValue) *Queue { return &Queue{kv: sessionstore.New(b)} }
 
 // Enqueue adds a message.
 //

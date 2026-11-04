@@ -41,7 +41,7 @@ type MailboxMessageResolved struct {
 
 // Agent is the agent-side role.
 type Agent struct {
-	b               bus.Bus
+	b               bus.AgentBus
 	configAuthority *ConfigAuthority
 	// manifestCache is keyed by extId (one manifest per extension). With N
 	// replicas, presence contributes N KV keys under `<extId>.`; the first live
@@ -61,11 +61,11 @@ type Agent struct {
 	presenceStarted bool
 }
 
-func New(b bus.Bus) *Agent {
+func New(b bus.AgentBus) *Agent {
 	return &Agent{b: b, manifestCache: map[string]*easybus.ExtensionManifest{}, livePresenceKeys: map[string]map[string]bool{}}
 }
 
-func (a *Agent) Bus() bus.Bus { return a.b }
+func (a *Agent) Bus() bus.AgentBus { return a.b }
 
 // Discover collects every reachable extension manifest.
 // ExtSupports reports whether a discovered extension advertises a protocol

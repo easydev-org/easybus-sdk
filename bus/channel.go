@@ -11,6 +11,22 @@ import (
 
 // Channels: publish/subscribe topics, distinct from the mailbox.
 //
+// NAMING: "CHANNEL" MEANS THREE DIFFERENT THINGS IN THIS CODEBASE, worth telling apart because the
+// words are otherwise interchangeable in conversation:
+//
+//	this type (bus.Channels, bus.PublishChannel)  a FAN-OUT topic: one event, many sessions. A
+//	                                             repository published a release; whoever follows
+//	                                             it hears about it.
+//	protocol.Ch*                                 a SUBJECT builder. Every message has one, on
+//	                                             whichever subject space it belongs to. Nothing
+//	                                             to do with fan-out.
+//	agentbus.DefaultChannel ("session-channel")  the built-in SUBSCRIPTION every session gets, so
+//	                                             anything can reach one conversation by name.
+//
+// So a channel (fan-out) is published on a subject (protocol.Ch*), and a session hears it because of
+// a subscription (DefaultChannel is one). The lower-case uses are transport vocabulary; the
+// upper-case one is this package.
+//
 // A mailbox message is a COMMAND addressed to one session; it drives that session's turn.
 // A channel message is an EVENT that any number of sessions may care about — a new tag in
 // a repository, a message in a group chat. They share the same transport (JetStream, tenant

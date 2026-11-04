@@ -37,7 +37,7 @@ type LifecyclePublishOpts struct {
 // LifecyclePublish publishes one lifecycle event on easybus.session.lifecycle.<kind>.
 // It always stamps a unique eid so consumers can dedup. If `inbox` is true it
 // uses the durable inbox publish path (at-least-once).
-func LifecyclePublish(ctx context.Context, b bus.Bus, tenant string, kind easybus.LifecycleEventKind, sessionName string, payload any, opts LifecyclePublishOpts) error {
+func LifecyclePublish(ctx context.Context, b bus.EventBus, tenant string, kind easybus.LifecycleEventKind, sessionName string, payload any, opts LifecyclePublishOpts) error {
 	id := protocol.NewID()
 	ev := &easybus.LifecycleEvent{
 		Id:          &id,
@@ -113,7 +113,7 @@ func WithLifecycleDeleted(fn func(ctx context.Context, ev *easybus.LifecycleEven
 // wildcard ">" for all) and dispatches by kind. Each event is acked only after
 // its handler returns nil; a non-nil handler result fails the delivery so the
 // transport redelivers (and the consumer dedups by eid on re-handling).
-func LifecycleConsume(ctx context.Context, b bus.Bus, sessionOrWildcard string, opts ...LifecycleHandlersOption) (*LifecycleConsumerSubscription, error) {
+func LifecycleConsume(ctx context.Context, b bus.Queue, sessionOrWildcard string, opts ...LifecycleHandlersOption) (*LifecycleConsumerSubscription, error) {
 	h := &lifecycleHandlers{}
 	for _, o := range opts {
 		o(h)
