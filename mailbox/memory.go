@@ -155,30 +155,18 @@ func (m *Memory) HasInterrupt(ctx context.Context, tenant, session string) (bool
 	return false, nil
 }
 
-// Watch streams this conversation's messages as they are enqueued.
+// Watch streams messages WRITTEN AFTER THE CALL, and only those.
 //
-// THE SNAPSHOT THEN THE STREAM, matching the durable queue: a caller that starts a watch gets what
-// already exists before it hears about changes. There is no explicit boundary marker because this
-// implementation can hand over the whole snapshot in one pass — but a caller that cannot tell the
-// two apart still works, because it only ever asks "is there an interrupt waiting".
+// NO SNAPSHOT, matching the durable queue: everything already queued is the drain's business, and
+// re-delivering a pending interrupt as a fresh cancel would abort the turn the user had just asked
+// for. A caller that needs what exists now calls Pending or Drain.
 //
-// CONSUMED ROWS ARE NOT RE-SENT. Enqueue is the only event, and a drain does not wake a watcher: the
-// point of the watch is to catch a cancel arriving WHILE a turn runs.
+// CONSUMED ROWS ARE NOT RE-SENT EITHER. Enqueue is the only event; a drain does not wake a watcher.
 func (m *Memory) Watch(_ context.Context, tenant, session string) (<-chan Message, func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ch := make(chan Message, 16)
 	key := tenant + "\x00" + session
-	// Snapshot first, so a caller sees what was queued before it started watching.
-	for k, meta := range m.meta {
-		if meta.Tenant != tenant || meta.Session != session {
-			continue
-		}
-		select {
-		case ch <- m.msgs[k]:
-		default:
-		}
-	}
 	m.watchers[key] = append(m.watchers[key], ch)
 	stop := func() {
 		m.mu.Lock()
