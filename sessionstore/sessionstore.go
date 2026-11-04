@@ -26,10 +26,15 @@ import (
 )
 
 // Store reads and writes per-session lists.
-type Store struct{ bus bus.Bus }
+//
+// IT ASKS FOR KeyValue, NOT Bus. Everything a list needs is a bucket operation — put, get, delete,
+// compare-and-swap, watch — and a store that could also publish, consume and store objects would be
+// advertising reach it does not have. The narrower type is also what makes a test possible: five
+// methods, not nineteen.
+type Store struct{ bus bus.KeyValue }
 
 // New returns a store over the given bus.
-func New(b bus.Bus) *Store { return &Store{bus: b} }
+func New(b bus.KeyValue) *Store { return &Store{bus: b} }
 
 // Key builds `t.<tenant>.s.<session>.<rest...>`.
 //

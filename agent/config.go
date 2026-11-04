@@ -29,7 +29,7 @@ type configValue struct {
 // bucket (caps.kv), serves startup snapshot requests, and delivers changes to
 // extensions as 1:1 reqs with an optional ack.
 type ConfigAuthority struct {
-	bus        bus.Bus
+	bus        bus.ConfigBus
 	defaultAck bool
 
 	declarations map[string]map[string][]*easybus.ExtensionConfigItem    // tenant -> extId -> items

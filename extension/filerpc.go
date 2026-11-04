@@ -23,7 +23,7 @@ import (
 // object reference travels in the request.
 func IngestFileViaAgent(
 	ctx context.Context,
-	b bus.Bus,
+	b bus.FileRPCBus,
 	tenant, name string,
 	data []byte,
 	sessionName string,
@@ -64,7 +64,7 @@ func IngestFileViaAgent(
 // returns the reference, so the bytes never ride the message.
 func GetFileViaAgent(
 	ctx context.Context,
-	b bus.Bus,
+	b bus.FileRPCBus,
 	tenant, code string,
 ) (*protocol.FileMetaWire, []byte, error) {
 	env, err := b.Request(

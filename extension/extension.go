@@ -244,7 +244,7 @@ type OnEventHook func(ctx context.Context, hook, sessionName string, payload any
 
 // Extension is the extension-side role.
 type Extension struct {
-	b        bus.Bus
+	b        bus.ExtensionBus
 	cfg      Config
 	manifest easybus.ExtensionManifest
 	// serveOnce makes Serve a one-shot operation.
@@ -318,7 +318,7 @@ func fieldSchemas(in []FieldSpec) []*easybus.ConfigFieldSchema {
 	return out
 }
 
-func New(b bus.Bus, cfg Config) *Extension {
+func New(b bus.ExtensionBus, cfg Config) *Extension {
 	e := &Extension{
 		b:           b,
 		cfg:         cfg,
