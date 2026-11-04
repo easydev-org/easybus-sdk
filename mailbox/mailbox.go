@@ -267,18 +267,22 @@ func (q *Queue) HasInterrupt(ctx context.Context, tenant, session string) (bool,
 	return false, nil
 }
 
-// Watch streams a session's mailbox entries as they are written: the current snapshot first, then
-// live changes. The boundary marker is preserved so a caller can tell "this already existed" from
-// "this just arrived".
+// Watch streams messages WRITTEN AFTER THE CALL, and only those.
 //
-// WHY THE RUNTIME NEEDS IT: an `interrupt` must abort a turn that is ALREADY RUNNING. Draining only
-// answers "what is waiting now", which is enough for a prompt but always one wake too late for a
-// cancel — by the time the next drain runs, the turn it was meant to stop has finished. A turn
-// holds a watch for its own duration instead.
+// WHY NOT THE SNAPSHOT: the runtime starts a watch and then drains. Everything that already exists is
+// the drain's business, and it is handled there with the ordering rules a batch needs. Reporting the
+// same row twice is worse than redundant — a pending interrupt from an earlier idle "stop" would be
+// delivered as a FRESH cancel and abort the turn the user had just asked for. That is not
+// hypothetical: it happened the first time this was wired, and the prompt was dropped with
+// `busy period ended first`.
 //
-// IT REPORTS DECODED MESSAGES, NOT RAW KV ENTRIES. The bucket stores JSON and the wrapper is the
-// queue's own shape; making every caller decode it would put the storage format in the runtime as
-// well. Deleted keys and rows this version cannot read are skipped — they carry no instruction.
+// WHY THE RUNTIME NEEDS A WATCH AT ALL: an `interrupt` must reach a turn that is ALREADY RUNNING.
+// Draining answers "what is waiting now", which for a cancel is always one wake too late — by the
+// time the next drain runs, the turn it was meant to stop has finished.
+//
+// IT REPORTS DECODED MESSAGES, NOT RAW KV ENTRIES: the bucket stores JSON, and exposing that shape
+// would put the storage format in the runtime too. Deleted keys and rows this version cannot read are
+// skipped — they carry no instruction.
 func (q *Queue) Watch(ctx context.Context, tenant, session string) (<-chan Message, func(), error) {
 	entries, stop, err := q.kv.Watch(ctx, DefaultBucket, sessionstore.Prefix(tenant, session))
 	if err != nil {
@@ -287,8 +291,16 @@ func (q *Queue) Watch(ctx context.Context, tenant, session string) (<-chan Messa
 	out := make(chan Message, 16)
 	go func() {
 		defer close(out)
+		// THE MARKER, NOT A TIMER. `SnapshotDone` is what separates "this already existed" from
+		// "this just arrived"; without waiting for it the first live message could be mistaken for
+		// history, or history for news.
+		snapshotDone := false
 		for e := range entries {
-			if e.Deleted || e.Value == "" {
+			if e.SnapshotDone {
+				snapshotDone = true
+				continue
+			}
+			if !snapshotDone || e.Deleted || e.Value == "" {
 				continue
 			}
 			var m Message
