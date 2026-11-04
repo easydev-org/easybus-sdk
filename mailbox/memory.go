@@ -25,11 +25,18 @@ type Memory struct {
 	// key — the one place this implementation could quietly disagree with the durable one.
 	meta map[string]struct{ Tenant, Session string }
 	seq  int64
+	// watchers is keyed by tenant\x00session, so a watch reports only its own conversation's
+	// changes. A fan-out list would make every turn pay for every other turn's traffic.
+	watchers map[string][]chan Message
 }
 
 // NewMemory returns an in-process queue.
 func NewMemory() *Memory {
-	return &Memory{msgs: map[string]Message{}, meta: map[string]struct{ Tenant, Session string }{}}
+	return &Memory{
+		msgs:     map[string]Message{},
+		meta:     map[string]struct{ Tenant, Session string }{},
+		watchers: map[string][]chan Message{},
+	}
 }
 
 // Enqueue adds a message; an existing id is replaced, matching the durable queue.
@@ -46,6 +53,15 @@ func (m *Memory) Enqueue(_ context.Context, tenant, session, id string, typ Type
 		Status: Pending, CreatedAt: time.Now().UnixMilli(),
 	}
 	m.meta[key] = struct{ Tenant, Session string }{tenant, session}
+	// Notify watchers with the value as written. A NON-BLOCKING send: the durable queue's watch can
+	// drop an update for a slow reader, and a queue whose producer blocks on its own observers is a
+	// queue that can deadlock against the turn draining it.
+	for _, ch := range m.watchers[tenant+"\x00"+session] {
+		select {
+		case ch <- m.msgs[key]:
+		default:
+		}
+	}
 	return id, nil
 }
 
@@ -137,4 +153,48 @@ func (m *Memory) HasInterrupt(ctx context.Context, tenant, session string) (bool
 		}
 	}
 	return false, nil
+}
+
+// Watch streams this conversation's messages as they are enqueued.
+//
+// THE SNAPSHOT THEN THE STREAM, matching the durable queue: a caller that starts a watch gets what
+// already exists before it hears about changes. There is no explicit boundary marker because this
+// implementation can hand over the whole snapshot in one pass — but a caller that cannot tell the
+// two apart still works, because it only ever asks "is there an interrupt waiting".
+//
+// CONSUMED ROWS ARE NOT RE-SENT. Enqueue is the only event, and a drain does not wake a watcher: the
+// point of the watch is to catch a cancel arriving WHILE a turn runs.
+func (m *Memory) Watch(_ context.Context, tenant, session string) (<-chan Message, func(), error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ch := make(chan Message, 16)
+	key := tenant + "\x00" + session
+	// Snapshot first, so a caller sees what was queued before it started watching.
+	for k, meta := range m.meta {
+		if meta.Tenant != tenant || meta.Session != session {
+			continue
+		}
+		select {
+		case ch <- m.msgs[k]:
+		default:
+		}
+	}
+	m.watchers[key] = append(m.watchers[key], ch)
+	stop := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		kept := m.watchers[key][:0]
+		for _, c := range m.watchers[key] {
+			if c != ch {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			delete(m.watchers, key)
+		} else {
+			m.watchers[key] = kept
+		}
+		close(ch)
+	}
+	return ch, stop, nil
 }

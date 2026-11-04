@@ -267,6 +267,44 @@ func (q *Queue) HasInterrupt(ctx context.Context, tenant, session string) (bool,
 	return false, nil
 }
 
+// Watch streams a session's mailbox entries as they are written: the current snapshot first, then
+// live changes. The boundary marker is preserved so a caller can tell "this already existed" from
+// "this just arrived".
+//
+// WHY THE RUNTIME NEEDS IT: an `interrupt` must abort a turn that is ALREADY RUNNING. Draining only
+// answers "what is waiting now", which is enough for a prompt but always one wake too late for a
+// cancel — by the time the next drain runs, the turn it was meant to stop has finished. A turn
+// holds a watch for its own duration instead.
+//
+// IT REPORTS DECODED MESSAGES, NOT RAW KV ENTRIES. The bucket stores JSON and the wrapper is the
+// queue's own shape; making every caller decode it would put the storage format in the runtime as
+// well. Deleted keys and rows this version cannot read are skipped — they carry no instruction.
+func (q *Queue) Watch(ctx context.Context, tenant, session string) (<-chan Message, func(), error) {
+	entries, stop, err := q.kv.Watch(ctx, DefaultBucket, sessionstore.Prefix(tenant, session))
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan Message, 16)
+	go func() {
+		defer close(out)
+		for e := range entries {
+			if e.Deleted || e.Value == "" {
+				continue
+			}
+			var m Message
+			if unmarshalMessage(e.Value, &m) != nil {
+				continue
+			}
+			select {
+			case out <- m:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, stop, nil
+}
+
 // list reads the session's rows and decodes them, skipping any this version cannot read.
 func (q *Queue) list(ctx context.Context, tenant, session string) ([]Message, error) {
 	rows, err := q.kv.List(ctx, DefaultBucket, sessionstore.Prefix(tenant, session))
