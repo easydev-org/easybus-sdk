@@ -15,6 +15,7 @@ version: 1.0.
 tools:
   - name: echo
     description: echo a message
+    effect: low
     input_schema:
       type: object
 variables:

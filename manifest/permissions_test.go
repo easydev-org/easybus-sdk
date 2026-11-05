@@ -31,6 +31,7 @@ permissions:
 tools:
   - name: merge-it
     description: merge
+    effect: low
     requires: [mr.merge]
 `
 

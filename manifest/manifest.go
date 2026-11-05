@@ -224,11 +224,54 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if err := m.validateConfig(); err != nil {
 		return nil, err
 	}
+	if err := m.validateEffects(); err != nil {
+		return nil, err
+	}
 	return &m, nil
 }
 
 // validateConfig enforces the config-knob rules that must hold before an
 // extension registers.
+// validEffects are the declared levels, in increasing order of impact.
+var validEffects = map[string]int{"none": 0, "low": 1, "medium": 2, "high": 3}
+
+// validateEffects enforces that every tool declares its impact, and that no permission understates the
+// impact of a tool it gates.
+//
+// BOTH ARE CHECKED AT PARSE TIME because neither is detectable later: a missing effect makes nothing
+// fail — the tool simply runs with whatever the client assumed — and a permission that looks safer than
+// its tool is a prompt to approve something while being told it is harmless.
+func (m *Manifest) validateEffects() error {
+	riskFloor := map[string]int{
+		// A risk level must be able to COVER the effect of the tools it gates. `risk` has three values and
+		// `effect` four, so each risk maps to the highest effect it may legitimately unlock.
+		"read":        0,
+		"write":       1,
+		"destructive": 3,
+	}
+	for _, t := range m.Tools {
+		rank, ok := validEffects[t.Effect]
+		if !ok {
+			return fmt.Errorf("manifest: tool %q declares effect %q; want none|low|medium|high",
+				t.Name, t.Effect)
+		}
+		for _, need := range t.Requires {
+			for _, p := range m.Permissions {
+				if p.Key != need {
+					continue
+				}
+				if riskFloor[p.Risk] < rank {
+					return fmt.Errorf(
+						"manifest: permission %q is risk=%q but gates tool %q with effect=%q; "+
+							"a grant must not look safer than what it unlocks",
+						p.Key, p.Risk, t.Name, t.Effect)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (m *Manifest) validateConfig() error {
 	for _, c := range m.Config {
 		if c.Kind != extension.ConfigKindSecret {
