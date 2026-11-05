@@ -65,7 +65,12 @@ type ToolSpec struct {
 	// understands. The tool therefore calls perm.Require itself with the target it
 	// resolves; that second check is the real boundary.
 	Requires []string
-	Execute  func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
+	// Effect is no | low | medium | high — what CALLING this tool does, independent of who may call it.
+	//
+	// Kept as a string rather than an enumerated type so this package does not take a dependency on the
+	// agent's vocabulary; the agent validates it at the boundary, which is where a typo must fail.
+	Effect  string
+	Execute func(ctx context.Context, args map[string]any, callID, sessionName, tenant string) (ToolResultData, error)
 }
 
 // NamespaceSpec declares one grouping of an extension's tools and config.
@@ -338,6 +343,7 @@ func New(b bus.ExtensionBus, cfg Config) *Extension {
 				InputSchema:    easybus.Struct(spec.InputSchema),
 				RequiredConfig: spec.RequiredConfig,
 				Requires:       spec.Requires,
+				Effect:         spec.Effect,
 			}
 			if spec.Namespace != "" {
 				ns := spec.Namespace

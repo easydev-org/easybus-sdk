@@ -101,6 +101,21 @@ type ManifestTool struct {
 	Namespace string `yaml:"namespace"`
 	// Requires names the permission keys a caller must hold to invoke this tool.
 	Requires []string `yaml:"requires"`
+	/**
+	 * Effect is the IMPACT of calling this tool, independent of who may call it.
+	 *
+	 * SEPARATE FROM Requires, which answers "does the caller hold the permission". A caller can be fully
+	 * authorised and still deserve a confirmation before merging a pull request.
+	 *
+	 *	none    nothing changes
+	 *	low     only the caller's own state changes
+	 *	medium  state others depend on changes
+	 *	high    an asset is consumed
+	 *
+	 * REQUIRED for the same reason as the agent's own manifest: a missing value is undetectable later —
+	 * nothing fails, the tool simply runs with whatever the client assumed.
+	 */
+	Effect string `yaml:"effect"`
 }
 
 // ManifestVariable declares one prompt template variable.

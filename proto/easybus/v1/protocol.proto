@@ -318,6 +318,22 @@ message ExtensionTool {
   // call's target (which repository? which sandbox?), and only the extension can
   // work that out — so the matching happens there. See PermissionDecl.
   repeated string requires = 7;
+
+  /**
+   * effect is the IMPACT of calling this tool, independent of who may call it.
+   *
+   * SEPARATE FROM requires, which answers "does the caller hold the permission". A caller can be fully
+   * authorised and still deserve a confirmation before merging someone else's pull request.
+   *
+   *   "none"    nothing changes
+   *   "low"     only the caller's own state changes
+   *   "medium"  state others depend on changes
+   *   "high"    an asset is consumed
+   *
+   * Empty means the extension did not declare it; the agent treats that as the WORST level rather than
+   * the best, because a tool that did not say what it does must not be presented as harmless.
+   */
+  string effect = 8;
 }
 
 // PermissionDecl is one permission an extension can require.
