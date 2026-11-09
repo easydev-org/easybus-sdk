@@ -48,10 +48,17 @@ jobs:
       # Plugin versions are installed explicitly rather than using `@latest`: a bot that
       # silently picked up a new generator major would produce a large unrelated diff, and the
       # reviewer would have no way to tell that apart from a real contract change.
+      #
+      # PINNED TO THE VERSION IN go.mod, AND THAT IS THE INVARIANT. protoc-gen-go's output
+      # changed its comment and rawDesc rendering between releases, so a pin that lags the
+      # runtime library makes this job regenerate a file that differs from the committed one in
+      # formatting alone — which is what opened PR #20 (a 731-line diff with zero descriptor
+      # change). `ci.yml`'s `generated` job fails if the two disagree, so a stale pin now
+      # fails the build instead of quietly mailing a reviewer a no-op diff.
       - name: Install protoc plugins
         run: |
           set -euo pipefail
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.5
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - uses: bufbuild/buf-setup-action@v1

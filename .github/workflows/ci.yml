@@ -37,6 +37,46 @@ jobs:
       - name: test
         run: go test -race ./...
 
+  # THE GENERATED CODE IS COMMITTED, SO SOMETHING HAS TO PROVE IT MATCHES THE PROTO.
+  #
+  # `protocol/proto_sync_test.go` checks that every message and field the proto declares is
+  # present in the generated descriptor, but it cannot see formatting: a generator-version
+  # change rewrites comments and `rawDesc` while leaving every field intact. That is exactly
+  # what PR #20 was — a 731-line diff, zero descriptor change — because codegen.yml's pin
+  # (v1.36.5) lagged go.mod (v1.36.12).
+  #
+  # THIS JOB IS THE INVARIANT: with the pins below, `buf generate` must reproduce `gen/` byte for
+  # byte. If it does not, either the proto changed without regenerating, or a pin drifted.
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # MUST MATCH codegen.yml AND regenerate.yml, AND go.mod's google.golang.org/protobuf.
+      - name: Install protoc-gen-go
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: gen/ must be reproducible from proto/
+        run: |
+          set -euo pipefail
+          bash generate.sh
+          if ! git diff --quiet -- gen/; then
+            echo "::error::gen/ does not match proto/ under the pinned generator."
+            echo "::error::Run 'bash generate.sh' and commit the result (see DEVELOP.md)."
+            git --no-pager diff --stat -- gen/
+            git --no-pager diff -- gen/ | head -50
+            exit 1
+          fi
+          echo "gen/ is reproducible: the committed code is what the pinned generator produces"
+
   # Runs in the SAME image the other three SDKs use, against the SAME pinned broker.
   #
   # The unit job above starts a broker with `go install …@latest`, which made the

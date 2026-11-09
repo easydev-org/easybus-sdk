@@ -50,10 +50,14 @@ jobs:
 
       # PINNED, for the same reason codegen.yml pins them: @latest would let a generator major
       # rewrite the whole file and make the real contract change unreadable in the diff.
+      #
+      # THE PIN MUST MATCH go.mod. A lagging pin regenerates formatting, not code — see the note
+      # in codegen.yml — and this workflow COMMITS the result, so the drift would land on the
+      # contributor's branch without anyone deciding to accept it.
       - name: Install protoc-gen-go
         run: |
           set -euo pipefail
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.5
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - uses: bufbuild/buf-setup-action@v1
